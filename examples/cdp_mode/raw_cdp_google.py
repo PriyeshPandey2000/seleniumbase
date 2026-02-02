@@ -4,6 +4,7 @@ import sys
 import random
 import argparse
 import os
+import time
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Google Search with CDP Mode')
@@ -23,6 +24,9 @@ search_url = f"https://www.google.com/search?q={search_query}&oq={search_query}&
 display = os.environ.get('DISPLAY', ':100')
 print(f"[*] DISPLAY environment variable: {display}")
 
+# Small delay to ensure Xvfb is fully ready
+time.sleep(1)
+
 # Start Pure CDP Mode (No WebDriver footprint!)
 print(f"[*] Opening Google search with Pure CDP Mode...")
 print(f"[*] Searching for: {search_query}")
@@ -36,6 +40,13 @@ chrome_kwargs = {
     "headless": False,  # We want headful mode with Xvfb
     "headless2": False,
 }
+
+# Add Chrome flags for containerized environments (Fly.io/Docker)
+# SeleniumBase CDP mode may need these flags in restricted container environments
+if os.path.exists("/.dockerenv") or os.environ.get("FLY_APP_NAME"):
+    # We're in a container (Docker or Fly.io)
+    chrome_kwargs["chromium_arg"] = "--no-sandbox,--disable-dev-shm-usage"
+    print("[*] Container detected: Adding --no-sandbox and --disable-dev-shm-usage flags")
 
 # Add proxy if provided
 if proxy_string:
@@ -185,8 +196,8 @@ except Exception as e:
 # Take FULL PAGE screenshot using the async method directly
 print("[*] Taking FULL PAGE screenshot (entire scrollable page)...")
 # Use the async method to get true full page screenshot
-# Save to mounted scripts directory so it's accessible on host
-screenshot_path = "/app/scripts/google_search_full_page.png"
+# Save to /app/ directory (works in both Docker and Fly.io)
+screenshot_path = "/app/google_search_full_page.png"
 sb.loop.run_until_complete(
     sb.page.save_screenshot(screenshot_path, full_page=True)
 )
@@ -218,7 +229,6 @@ except Exception as e:
 
 print("\n[*] Bot evasion test complete!")
 print(f"[*] Screenshot saved: {screenshot_path}")
-print("[*] On host: ./google_search_full_page.png (in cdp_mode directory)")
 # print("    - google_search_results.pdf (PDF)")
 # print("    - google_search_source.html (HTML)")
 

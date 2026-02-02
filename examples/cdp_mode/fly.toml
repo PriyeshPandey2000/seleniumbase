@@ -5,7 +5,7 @@ app = "google-search-api"
 primary_region = "bom"  # Mumbai region (closest to India)
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "examples/cdp_mode/Dockerfile"
 
 [env]
   PYTHONUNBUFFERED = "1"
@@ -15,15 +15,15 @@ primary_region = "bom"  # Mumbai region (closest to India)
 [http_service]
   internal_port = 5000
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = false  # Keep machine running (Chrome needs to stay warm)
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1  # Always keep at least 1 machine running
   processes = ["app"]
 
 [[vm]]
   cpu_kind = "shared"
   cpus = 2
-  memory_mb = 2048  # Start with 2GB, upgrade to 4096 for production
+  memory_mb = 4096  # 4GB for production (Chrome + Xvfb need more RAM)
 
 [[services]]
   http_checks = []
