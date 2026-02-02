@@ -103,7 +103,7 @@ ENV DISPLAY=:100
 EXPOSE 5000
 
 #==================
-# Run Script in Headful Mode with Xvfb
+# Run API in Headful Mode with Xvfb
 #==================
 CMD ["sh", "-c", "\
     echo '========================================' && \
@@ -113,10 +113,7 @@ CMD ["sh", "-c", "\
     echo 'Waiting for Xvfb to initialize...' && \
     sleep 3 && \
     echo '========================================' && \
-    echo 'Running Google Search Script (HEADFUL MODE)' && \
+    echo 'Starting Flask API Server...' && \
     echo '========================================' && \
-    python3 raw_cdp_google_submit.py && \
-    echo '========================================' && \
-    echo 'Script completed!' && \
-    echo '========================================' \
+    python3 /app/api_google_search.py \
     "]
