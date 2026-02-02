@@ -24,8 +24,11 @@ search_url = f"https://www.google.com/search?q={search_query}&oq={search_query}&
 display = os.environ.get('DISPLAY', ':100')
 print(f"[*] DISPLAY environment variable: {display}")
 
-# Small delay to ensure Xvfb is fully ready
-time.sleep(1)
+# Wait a bit longer to ensure Xvfb is fully ready (especially in Fly.io)
+# Xvfb might need more time to initialize in cloud environments
+wait_time = 2 if os.environ.get("FLY_APP_NAME") else 1
+print(f"[*] Waiting {wait_time} seconds for Xvfb to be ready...")
+time.sleep(wait_time)
 
 # Start Pure CDP Mode (No WebDriver footprint!)
 print(f"[*] Opening Google search with Pure CDP Mode...")
@@ -42,11 +45,9 @@ chrome_kwargs = {
 }
 
 # Add Chrome flags for containerized environments (Fly.io/Docker)
-# SeleniumBase CDP mode may need these flags in restricted container environments
-if os.path.exists("/.dockerenv") or os.environ.get("FLY_APP_NAME"):
-    # We're in a container (Docker or Fly.io)
-    chrome_kwargs["chromium_arg"] = "--no-sandbox,--disable-dev-shm-usage"
-    print("[*] Container detected: Adding --no-sandbox and --disable-dev-shm-usage flags")
+# Always add these flags - they're required in containerized environments
+chrome_kwargs["chromium_arg"] = "--no-sandbox,--disable-dev-shm-usage"
+print("[*] Adding Chrome flags: --no-sandbox, --disable-dev-shm-usage")
 
 # Add proxy if provided
 if proxy_string:
