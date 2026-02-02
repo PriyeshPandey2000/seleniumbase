@@ -85,12 +85,12 @@ WORKDIR /app
 # Create output directory for screenshots, PDFs, etc.
 RUN mkdir -p /app/output
 
-# Copy test and Google scripts
-COPY test_chromium.py /app/
-COPY raw_cdp_google_submit_docker.py /app/
-COPY raw_cdp_google_submit.py /app/
-COPY raw_cdp_google.py /app/
-COPY api_google_search.py /app/
+# Copy test and Google scripts (paths relative to repo root since build context is root)
+COPY examples/cdp_mode/test_chromium.py /app/
+COPY examples/cdp_mode/raw_cdp_google_submit_docker.py /app/
+COPY examples/cdp_mode/raw_cdp_google_submit.py /app/
+COPY examples/cdp_mode/raw_cdp_google.py /app/
+COPY examples/cdp_mode/api_google_search.py /app/
 
 #==================
 # Display Configuration
