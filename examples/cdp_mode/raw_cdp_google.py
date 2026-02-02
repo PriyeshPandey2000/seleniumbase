@@ -75,7 +75,14 @@ chrome_kwargs = {
     "headless": False,
     "headless2": True,  # New headless mode - harder to detect than old headless
 }
-print("[*] Using headless2 mode (new headless - harder to detect, no Xvfb needed)")
+
+# Add ESSENTIAL Chrome flags for Fly.io cloud environment
+# These are REQUIRED - Chrome will crash without them in restrictive cloud environments
+chrome_kwargs["chromium_arg"] = [
+    "--no-sandbox",              # Required: Fly.io doesn't allow sandbox
+    "--disable-dev-shm-usage",   # Required: Limited /dev/shm in containers
+]
+print("[*] Using headless2 mode with essential cloud flags (--no-sandbox, --disable-dev-shm-usage)")
 
 # Add proxy if provided
 if proxy_string:
