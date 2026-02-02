@@ -49,7 +49,8 @@ if not xvfb_running:
             stderr=subprocess.DEVNULL
         )
         print(f"[+] Started Xvfb on {display}")
-        time.sleep(2)  # Wait for Xvfb to initialize
+        time.sleep(5)  # Wait longer for Xvfb to fully initialize
+        print(f"[+] Xvfb initialization wait complete")
     except Exception as e:
         print(f"[!] Could not start Xvfb: {e}")
         print("[!] WARNING: Continuing without Xvfb verification...")
@@ -70,9 +71,18 @@ chrome_kwargs = {
 
 # Add Chrome flags for containerized environments (Fly.io/Docker)
 # Always add these flags - they're required in containerized environments
-# Try as a list first (SeleniumBase might prefer this format)
-chrome_kwargs["chromium_arg"] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-print("[*] Adding Chrome flags: --no-sandbox, --disable-dev-shm-usage, --disable-gpu")
+chrome_kwargs["chromium_arg"] = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-setuid-sandbox",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--no-first-run",
+    "--no-default-browser-check"
+]
+print("[*] Adding Chrome flags for containerized environment (9 flags)")
 
 # Add proxy if provided
 if proxy_string:

@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
     ca-certificates \
+    procps \
     # Chrome runtime dependencies
     libasound2 \
     libatk-bridge2.0-0 \
@@ -110,10 +111,19 @@ CMD ["sh", "-c", "\
     echo 'Starting Xvfb virtual display...' && \
     echo '========================================' && \
     Xvfb :100 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
-    echo 'Waiting for Xvfb to initialize...' && \
-    sleep 3 && \
-    echo '========================================' && \
-    echo 'Starting Flask API Server...' && \
-    echo '========================================' && \
-    python3 /app/api_google_search.py \
+    XVFB_PID=$! && \
+    echo \"Xvfb started with PID: $XVFB_PID\" && \
+    echo 'Waiting for Xvfb to fully initialize...' && \
+    sleep 5 && \
+    echo 'Verifying Xvfb is running...' && \
+    if ps -p $XVFB_PID > /dev/null; then \
+        echo 'Xvfb is running successfully' && \
+        echo '========================================' && \
+        echo 'Starting Flask API Server...' && \
+        echo '========================================' && \
+        python3 /app/api_google_search.py; \
+    else \
+        echo 'ERROR: Xvfb failed to start!' && \
+        exit 1; \
+    fi \
     "]
