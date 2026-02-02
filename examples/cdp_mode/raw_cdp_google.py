@@ -54,15 +54,18 @@ if args.proxy:
     chrome_kwargs["proxy"] = args.proxy
 
 try:
-    # Warm up Chrome with the working command from commit f59393fa
+    # Try to warm up Chrome (non-fatal if it fails)
     chrome_path = "/usr/bin/google-chrome-stable"
-    subprocess.run(
-        [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
-         '--dump-dom', 'about:blank'],
-        capture_output=True,
-        text=True,
-        timeout=10  # 10 seconds like the working version
-    )
+    try:
+        subprocess.run(
+            [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+             '--dump-dom', 'about:blank'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+    except:
+        pass  # Continue even if warmup fails
 
     # Launch Chrome with CDP
     sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
