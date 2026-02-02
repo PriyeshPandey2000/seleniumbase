@@ -54,13 +54,14 @@ if args.proxy:
     chrome_kwargs["proxy"] = args.proxy
 
 try:
-    # Warm up Chrome (critical for Fly.io - prevents SIGPIPE crash)
-    # This initializes Chrome's cache/profile before CDP connects
+    # Warm up Chrome with the working command from commit f59393fa
     chrome_path = "/usr/bin/google-chrome-stable"
     subprocess.run(
-        [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--version'],
+        [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+         '--dump-dom', 'about:blank'],
         capture_output=True,
-        timeout=5
+        text=True,
+        timeout=10  # 10 seconds like the working version
     )
 
     # Launch Chrome with CDP
