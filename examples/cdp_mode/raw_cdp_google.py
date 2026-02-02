@@ -3,6 +3,7 @@ from seleniumbase import sb_cdp
 import sys
 import random
 import argparse
+import os
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Google Search with CDP Mode')
@@ -18,6 +19,10 @@ proxy_string = args.proxy
 # Use your full search URL directly
 search_url = f"https://www.google.com/search?q={search_query}&oq={search_query}&sourceid=chrome&ie=UTF-8"
 
+# Check DISPLAY environment variable
+display = os.environ.get('DISPLAY', ':100')
+print(f"[*] DISPLAY environment variable: {display}")
+
 # Start Pure CDP Mode (No WebDriver footprint!)
 print(f"[*] Opening Google search with Pure CDP Mode...")
 print(f"[*] Searching for: {search_query}")
@@ -28,6 +33,8 @@ if proxy_string:
 chrome_kwargs = {
     "incognito": True,
     "ad_block": True,
+    "headless": False,  # We want headful mode with Xvfb
+    "headless2": False,
 }
 
 # Add proxy if provided

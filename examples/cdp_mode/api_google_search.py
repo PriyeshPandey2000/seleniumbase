@@ -17,6 +17,29 @@ SEARCH_SCRIPT = SCRIPT_DIR / "raw_cdp_google.py"
 OUTPUT_DIR = SCRIPT_DIR
 SCREENSHOT_NAME = "google_search_full_page.png"
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint with API information"""
+    return jsonify({
+        "service": "Google Search CDP Mode API",
+        "status": "running",
+        "endpoints": {
+            "GET /": "API information (this page)",
+            "GET /health": "Health check",
+            "POST /search": "Search Google with CDP mode",
+            "GET /screenshot": "View latest screenshot",
+            "GET /screenshot/download": "Download latest screenshot"
+        },
+        "example_search": {
+            "method": "POST",
+            "url": "/search",
+            "body": {
+                "query": "best hotels",
+                "proxy": "username:password@host:port"  # Optional
+            }
+        }
+    })
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
@@ -63,12 +86,18 @@ def search():
         
         print(f"[API] Executing: {' '.join(cmd)}")
         
+        # Prepare environment with DISPLAY for Xvfb
+        env = os.environ.copy()
+        env['DISPLAY'] = os.environ.get('DISPLAY', ':100')
+        env['PYTHONUNBUFFERED'] = '1'
+        
         # Run the search script
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120  # 2 minute timeout
+            timeout=120,  # 2 minute timeout
+            env=env  # Pass environment variables
         )
         
         # Check if screenshot was created
