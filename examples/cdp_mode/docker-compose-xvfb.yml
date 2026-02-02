@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  google-search-api-headful:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: seleniumbase-google-api-headful
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/New_York
+      - DISPLAY=:99
+      - HEADLESS=false  # Run in headful mode with Xvfb
+      - USE_XVFB=true
+    volumes:
+      - ./screenshots:/tmp:rw
+    restart: unless-stopped
+    # Start Xvfb before the API
+    command: >
+      sh -c "
+      echo 'Starting Xvfb virtual display...' &&
+      Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+      echo 'Waiting for Xvfb to start...' &&
+      sleep 2 &&
+      echo 'Starting API with headful mode...' &&
+      python api_google_search.py
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2.5G  # Slightly more RAM for Xvfb
+        reservations:
+          cpus: '1.0'
+          memory: 1.5G
+    security_opt:
+      - seccomp:unconfined
+    shm_size: '2gb'

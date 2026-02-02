@@ -1,0 +1,45 @@
+# Screenshots and images
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Output directories
+output/
+downloaded_files/
+
+# Test files (optional - keep if you want)
+# test_chromium.py
+# test_headful_vs_headless.py
+
+# Large documentation files (optional - keep if you want)
+# CLOUD_DEPLOYMENT*.md
+# DIGITALOCEAN*.md
+# INDIA_FRIENDLY*.md
+# API_DEPLOYMENT*.md
+
+# Docker volumes
+.docker/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  google-search-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: seleniumbase-google-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/New_York
+    volumes:
+      # Mount volume for screenshots (optional)
+      - ./screenshots:/tmp:rw
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    # Security options for Chrome
+    security_opt:
+      - seccomp:unconfined
+    shm_size: '2gb'  # Required for Chrome to run properly

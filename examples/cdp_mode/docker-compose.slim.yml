@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  google-search-headful:
+    build:
+      context: .
+      dockerfile: Dockerfile.slim
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
+    container_name: google-search-test-headful
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/New_York
+      - DISPLAY=:100
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    # Security options for Chrome
+    security_opt:
+      - seccomp:unconfined
+    shm_size: '2gb'  # Required for Chrome
+    # Volume mount: Mount current directory so you can run any script
+    volumes:
+      - .:/app/scripts  # Mount all scripts from current directory
+    # Auto-remove after completion
+    restart: "no"
