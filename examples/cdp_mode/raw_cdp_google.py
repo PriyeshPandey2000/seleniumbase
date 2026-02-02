@@ -62,27 +62,13 @@ if proxy_string:
     print(f"[*] Using proxy: {proxy_string.split('@')[-1] if '@' in proxy_string else proxy_string}")
 
 # Build Chrome options
+# Keep it simple - SeleniumBase CDP mode handles containerized environments internally!
 chrome_kwargs = {
     "incognito": True,
     "ad_block": True,
-    "headless": False,  # We want headful mode with Xvfb
-    "headless2": False,
+    "headless": False,  # Headful mode for CAPTCHA bypass (requires Xvfb)
 }
-
-# Add Chrome flags for containerized environments (Fly.io/Docker)
-# Always add these flags - they're required in containerized environments
-chrome_kwargs["chromium_arg"] = [
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--disable-software-rasterizer",
-    "--disable-setuid-sandbox",
-    "--disable-extensions",
-    "--disable-background-networking",
-    "--no-first-run",
-    "--no-default-browser-check"
-]
-print("[*] Adding Chrome flags for containerized environment (9 flags)")
+print("[*] Using headful mode with minimal config (SeleniumBase handles container flags)")
 
 # Add proxy if provided
 if proxy_string:
