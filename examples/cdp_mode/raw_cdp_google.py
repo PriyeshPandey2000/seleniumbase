@@ -96,13 +96,44 @@ if proxy_string:
 # - Popup blocking: Enabled by default in Chrome settings
 
 print(f"[*] Launching Chrome with kwargs: {chrome_kwargs}")
+
+# Add debug info before launching
+print(f"[DEBUG] Checking Chrome binary...")
+import os
+chrome_path = "/usr/bin/google-chrome-stable"
+if os.path.exists(chrome_path):
+    print(f"[DEBUG] Chrome binary exists at {chrome_path}")
+    print(f"[DEBUG] Chrome is executable: {os.access(chrome_path, os.X_OK)}")
+else:
+    print(f"[DEBUG] Chrome binary NOT FOUND at {chrome_path}")
+
+print(f"[DEBUG] Environment: DISPLAY={os.environ.get('DISPLAY', 'not set')}")
+print(f"[DEBUG] Current user: {os.environ.get('USER', 'unknown')}")
+
+try:
+    # Try to get Chrome version
+    result = subprocess.run([chrome_path, '--version'], capture_output=True, text=True, timeout=5)
+    print(f"[DEBUG] Chrome version: {result.stdout.strip()}")
+except Exception as ve:
+    print(f"[DEBUG] Could not get Chrome version: {ve}")
+
+print(f"[DEBUG] Attempting to launch Chrome...")
 try:
     sb = sb_cdp.Chrome(search_url, **chrome_kwargs)
+    print(f"[DEBUG] Chrome launched successfully!")
 except Exception as e:
     print(f"[!] ERROR launching Chrome: {e}")
     print(f"[!] Error type: {type(e).__name__}")
     import traceback
+    print(f"[DEBUG] Full traceback:")
     traceback.print_exc()
+
+    # Try to get more info about the error
+    print(f"\n[DEBUG] Additional debugging info:")
+    print(f"  - Chrome binary: {chrome_path}")
+    print(f"  - Binary exists: {os.path.exists(chrome_path)}")
+    print(f"  - Binary executable: {os.access(chrome_path, os.X_OK)}")
+    print(f"  - ChromeDriver in PATH: {subprocess.run(['which', 'chromedriver'], capture_output=True, text=True).stdout.strip()}")
     raise
 
 # Wait for page to fully load
