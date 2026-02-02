@@ -24,11 +24,35 @@ search_url = f"https://www.google.com/search?q={search_query}&oq={search_query}&
 display = os.environ.get('DISPLAY', ':100')
 print(f"[*] DISPLAY environment variable: {display}")
 
-# Wait a bit longer to ensure Xvfb is fully ready (especially in Fly.io)
-# Xvfb might need more time to initialize in cloud environments
-wait_time = 2 if os.environ.get("FLY_APP_NAME") else 1
-print(f"[*] Waiting {wait_time} seconds for Xvfb to be ready...")
-time.sleep(wait_time)
+# Try to start Xvfb if it's not running (for docker-compose run scenarios)
+import subprocess
+xvfb_running = False
+try:
+    result = subprocess.run(
+        ['pgrep', '-f', f'Xvfb {display}'],
+        capture_output=True,
+        timeout=1
+    )
+    if result.returncode == 0:
+        xvfb_running = True
+        print(f"[+] Xvfb is already running on display {display}")
+except Exception:
+    pass
+
+if not xvfb_running:
+    print(f"[*] Xvfb not running, attempting to start it on {display}...")
+    try:
+        # Start Xvfb in background
+        subprocess.Popen(
+            ['Xvfb', display, '-screen', '0', '1920x1080x24', '-ac', '+extension', 'GLX', '+render', '-noreset'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print(f"[+] Started Xvfb on {display}")
+        time.sleep(2)  # Wait for Xvfb to initialize
+    except Exception as e:
+        print(f"[!] Could not start Xvfb: {e}")
+        print("[!] WARNING: Continuing without Xvfb verification...")
 
 # Start Pure CDP Mode (No WebDriver footprint!)
 print(f"[*] Opening Google search with Pure CDP Mode...")
@@ -46,8 +70,9 @@ chrome_kwargs = {
 
 # Add Chrome flags for containerized environments (Fly.io/Docker)
 # Always add these flags - they're required in containerized environments
-chrome_kwargs["chromium_arg"] = "--no-sandbox,--disable-dev-shm-usage"
-print("[*] Adding Chrome flags: --no-sandbox, --disable-dev-shm-usage")
+# Try as a list first (SeleniumBase might prefer this format)
+chrome_kwargs["chromium_arg"] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+print("[*] Adding Chrome flags: --no-sandbox, --disable-dev-shm-usage, --disable-gpu")
 
 # Add proxy if provided
 if proxy_string:
@@ -58,7 +83,16 @@ if proxy_string:
 # - incognito=True: Private browsing mode
 # - proxy: Optional proxy with authentication support
 # - Popup blocking: Enabled by default in Chrome settings
-sb = sb_cdp.Chrome(search_url, **chrome_kwargs)
+
+print(f"[*] Launching Chrome with kwargs: {chrome_kwargs}")
+try:
+    sb = sb_cdp.Chrome(search_url, **chrome_kwargs)
+except Exception as e:
+    print(f"[!] ERROR launching Chrome: {e}")
+    print(f"[!] Error type: {type(e).__name__}")
+    import traceback
+    traceback.print_exc()
+    raise
 
 # Wait for page to fully load
 sb.sleep(3)
