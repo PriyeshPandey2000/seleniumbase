@@ -5,6 +5,7 @@ import random
 import argparse
 import os
 import time
+import subprocess
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Google Search with CDP Mode')
@@ -114,8 +115,23 @@ try:
     # Try to get Chrome version
     result = subprocess.run([chrome_path, '--version'], capture_output=True, text=True, timeout=5)
     print(f"[DEBUG] Chrome version: {result.stdout.strip()}")
+    if result.stderr:
+        print(f"[DEBUG] Chrome stderr: {result.stderr}")
 except Exception as ve:
     print(f"[DEBUG] Could not get Chrome version: {ve}")
+
+# Try to launch Chrome directly to see actual error
+print(f"[DEBUG] Testing Chrome launch directly...")
+try:
+    test_result = subprocess.run(
+        [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--dump-dom', 'about:blank'],
+        capture_output=True, text=True, timeout=10
+    )
+    print(f"[DEBUG] Direct Chrome test - Return code: {test_result.returncode}")
+    if test_result.stderr:
+        print(f"[DEBUG] Direct Chrome stderr: {test_result.stderr[:500]}")
+except Exception as te:
+    print(f"[DEBUG] Direct Chrome test failed: {te}")
 
 print(f"[DEBUG] Attempting to launch Chrome...")
 try:
