@@ -1,194 +1,172 @@
 """
-Simple Flask API for Google Search with CDP Mode
+Simple Flask API for CDP Mode Web Scraping
 Run locally: python api_google_search.py
 """
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 import subprocess
 import os
 import sys
-import time
-from pathlib import Path
+import json
 
 app = Flask(__name__)
 
 # Get the directory where this script is located
-SCRIPT_DIR = Path(__file__).parent
-SEARCH_SCRIPT = SCRIPT_DIR / "raw_cdp_google.py"
-OUTPUT_DIR = SCRIPT_DIR
-SCREENSHOT_NAME = "google_search_full_page.png"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRAPER_SCRIPT = os.path.join(SCRIPT_DIR, "raw_cdp_google.py")
 
 @app.route('/', methods=['GET'])
 def root():
     """Root endpoint with API information"""
     return jsonify({
-        "service": "Google Search CDP Mode API",
+        "service": "CDP Mode Web Scraping API",
         "status": "running",
         "endpoints": {
             "GET /": "API information (this page)",
             "GET /health": "Health check",
-            "POST /search": "Search Google with CDP mode",
-            "GET /screenshot": "View latest screenshot",
-            "GET /screenshot/download": "Download latest screenshot"
+            "POST /search": "Scrape URL or search Google"
         },
-        "example_search": {
+        "example_request": {
             "method": "POST",
             "url": "/search",
             "body": {
-                "query": "best hotels",
-                "proxy": "username:password@host:port"  # Optional
+                "query": "best hotels",           # Search Google (optional)
+                "url": "https://example.com",     # OR direct URL (optional)
+                "proxy": "user:pass@host:port",   # Optional
+                "screenshot": True                # Optional (default: true)
             }
+        },
+        "example_response": {
+            "success": True,
+            "screenshot_base64": "iVBORw0KGg...",  # If screenshot=true
+            "html": "<html>...</html>",
+            "url": "https://...",
+            "query": "best hotels"
         }
     })
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
-    return jsonify({"status": "healthy", "service": "google-search-cdp-api"})
+    return jsonify({"status": "healthy", "service": "cdp-scraping-api"})
 
 @app.route('/search', methods=['POST'])
 def search():
     """
-    Search Google with CDP Mode
-    
+    Scrape URL or search Google with CDP Mode
+
     Request body (JSON):
     {
-        "query": "search term",  # Required
-        "proxy": "host:port" or "username:password@host:port"  # Optional
+        "query": "search term",    # Optional: searches Google
+        "url": "https://...",      # Optional: scrape direct URL
+        "proxy": "host:port",      # Optional
+        "screenshot": true         # Optional (default: true)
     }
-    
+
     Returns:
     {
         "success": true/false,
-        "message": "status message",
-        "screenshot_path": "path to screenshot",
-        "query": "search query used",
-        "proxy": "proxy used (if any)"
+        "screenshot_base64": "...",  # If screenshot=true
+        "html": "<html>...</html>",
+        "url": "final URL",
+        "query": "search query" (if used)
     }
     """
     try:
         data = request.get_json() or {}
-        
-        # Get search query
-        search_query = data.get('query', 'best hotels')
-        if not search_query:
+
+        # Get query or URL (one must be provided)
+        query = data.get('query')
+        url = data.get('url')
+
+        if not query and not url:
             return jsonify({
                 "success": False,
-                "error": "Query parameter is required"
+                "error": "Either 'query' or 'url' parameter is required"
             }), 400
-        
-        # Get proxy (optional)
-        proxy = data.get('proxy', None)
-        
+
+        if query and url:
+            return jsonify({
+                "success": False,
+                "error": "Provide either 'query' OR 'url', not both"
+            }), 400
+
+        # Get optional parameters
+        proxy = data.get('proxy')
+        screenshot = data.get('screenshot', True)  # Default to True
+
         # Build command
-        cmd = [sys.executable, str(SEARCH_SCRIPT), search_query]
+        cmd = [sys.executable, SCRAPER_SCRIPT]
+
+        # Add query or URL
+        if query:
+            cmd.append(query)
+        elif url:
+            cmd.extend(['--url', url])
+
+        # Add optional parameters
         if proxy:
             cmd.extend(['--proxy', proxy])
-        
+        if not screenshot:
+            cmd.append('--no-screenshot')
+
         print(f"[API] Executing: {' '.join(cmd)}")
-        
-        # Prepare environment with DISPLAY for Xvfb
-        env = os.environ.copy()
-        env['DISPLAY'] = os.environ.get('DISPLAY', ':100')
-        env['PYTHONUNBUFFERED'] = '1'
-        
-        # Run the search script
+
+        # Run the scraper script
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=120,  # 2 minute timeout
-            env=env  # Pass environment variables
+            env=os.environ.copy()
         )
-        
-        # Check if screenshot was created
-        screenshot_path = OUTPUT_DIR / SCREENSHOT_NAME
-        screenshot_exists = screenshot_path.exists()
-        
-        response = {
-            "success": result.returncode == 0 and screenshot_exists,
-            "message": "Search completed successfully" if result.returncode == 0 else "Search failed",
-            "query": search_query,
-            "proxy": proxy if proxy else None,
-            "screenshot_path": str(screenshot_path) if screenshot_exists else None,
-            "screenshot_exists": screenshot_exists,
-            "return_code": result.returncode,
-            "stdout": result.stdout[-500:] if result.stdout else None,  # Last 500 chars
-            "stderr": result.stderr[-500:] if result.stderr else None,  # Last 500 chars
-        }
-        
-        if result.returncode != 0:
-            response["error"] = result.stderr[-500:] if result.stderr else "Unknown error"
-            return jsonify(response), 500
-        
-        return jsonify(response), 200
-        
+
+        # Parse JSON output from script
+        if result.returncode == 0:
+            try:
+                # Script outputs JSON on last line
+                output_lines = result.stdout.strip().split('\n')
+                json_output = output_lines[-1]
+                response_data = json.loads(json_output)
+                return jsonify(response_data), 200
+            except json.JSONDecodeError as e:
+                return jsonify({
+                    "success": False,
+                    "error": f"Failed to parse script output: {e}",
+                    "stdout": result.stdout[-500:],
+                    "stderr": result.stderr[-500:]
+                }), 500
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Scraping failed",
+                "stderr": result.stderr[-500:] if result.stderr else "Unknown error",
+                "stdout": result.stdout[-500:] if result.stdout else None
+            }), 500
+
     except subprocess.TimeoutExpired:
         return jsonify({
             "success": False,
-            "error": "Search timed out after 2 minutes"
+            "error": "Request timed out after 2 minutes"
         }), 504
-        
+
     except Exception as e:
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
 
-@app.route('/screenshot', methods=['GET'])
-def get_screenshot():
-    """
-    Get the latest screenshot
-    
-    Returns the screenshot file if it exists
-    """
-    screenshot_path = OUTPUT_DIR / SCREENSHOT_NAME
-    
-    if not screenshot_path.exists():
-        return jsonify({
-            "error": "Screenshot not found. Run a search first."
-        }), 404
-    
-    return send_file(
-        str(screenshot_path),
-        mimetype='image/png',
-        as_attachment=False
-    )
-
-@app.route('/screenshot/download', methods=['GET'])
-def download_screenshot():
-    """
-    Download the latest screenshot
-    
-    Returns the screenshot file as download
-    """
-    screenshot_path = OUTPUT_DIR / SCREENSHOT_NAME
-    
-    if not screenshot_path.exists():
-        return jsonify({
-            "error": "Screenshot not found. Run a search first."
-        }), 404
-    
-    return send_file(
-        str(screenshot_path),
-        mimetype='image/png',
-        as_attachment=True,
-        download_name=SCREENSHOT_NAME
-    )
-
 if __name__ == '__main__':
     print("=" * 60)
-    print("Google Search CDP Mode API")
+    print("CDP Mode Web Scraping API")
     print("=" * 60)
-    print(f"Script: {SEARCH_SCRIPT}")
-    print(f"Output directory: {OUTPUT_DIR}")
+    print(f"Scraper script: {SCRAPER_SCRIPT}")
     print("\nEndpoints:")
     print("  GET  /health - Health check")
-    print("  POST /search - Search Google")
-    print("  GET  /screenshot - View latest screenshot")
-    print("  GET  /screenshot/download - Download latest screenshot")
+    print("  POST /search - Scrape URL or search Google")
     print("\nExample POST /search:")
-    print('  {"query": "best hotels", "proxy": "user:pass@host:port"}')
+    print('  {"query": "best hotels", "screenshot": true}')
+    print('  {"url": "https://example.com", "screenshot": false}')
     print("\nStarting server on http://localhost:5000")
     print("=" * 60)
-    
+
     app.run(host='0.0.0.0', port=5000, debug=True)

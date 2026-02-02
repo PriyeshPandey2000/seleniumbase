@@ -1,330 +1,175 @@
-"""Pure CDP Mode Google Search - Maximum Bot Evasion"""
+"""CDP Mode Web Scraper - Returns JSON output"""
 from seleniumbase import sb_cdp
 import sys
-import random
 import argparse
 import os
-import time
-import subprocess
+import json
+import base64
+import io
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description='Google Search with CDP Mode')
-parser.add_argument('search_query', nargs='?', default='best hotels', 
-                    help='Search query (default: "best hotels")')
+parser = argparse.ArgumentParser(description='CDP Mode Web Scraper')
+parser.add_argument('query', nargs='?', default=None,
+                    help='Search query for Google')
+parser.add_argument('--url', type=str, default=None,
+                    help='Direct URL to scrape')
 parser.add_argument('--proxy', type=str, default=None,
                     help='Proxy server. Format: "host:port" or "username:password@host:port"')
+parser.add_argument('--no-screenshot', action='store_true',
+                    help='Skip screenshot capture')
 args = parser.parse_args()
 
-search_query = args.search_query
-proxy_string = args.proxy
+# Determine target URL
+if args.url:
+    target_url = args.url
+    query_string = None
+elif args.query:
+    # Build Google search URL
+    query_string = args.query
+    target_url = f"https://www.google.com/search?q={query_string}&sourceid=chrome&ie=UTF-8"
+else:
+    print(json.dumps({
+        "success": False,
+        "error": "Either query or --url must be provided"
+    }))
+    sys.exit(1)
 
-# Use your full search URL directly
-search_url = f"https://www.google.com/search?q={search_query}&oq={search_query}&sourceid=chrome&ie=UTF-8"
-
-# ============================================
-# Xvfb Setup (COMMENTED OUT - Using headless2 instead)
-# ============================================
-# Uncomment this section if you need headful mode (headless=False) with Xvfb
-#
-# # Check DISPLAY environment variable
-# display = os.environ.get('DISPLAY', ':100')
-# print(f"[*] DISPLAY environment variable: {display}")
-#
-# # Try to start Xvfb if it's not running (for docker-compose run scenarios)
-# import subprocess
-# xvfb_running = False
-# try:
-#     result = subprocess.run(
-#         ['pgrep', '-f', f'Xvfb {display}'],
-#         capture_output=True,
-#         timeout=1
-#     )
-#     if result.returncode == 0:
-#         xvfb_running = True
-#         print(f"[+] Xvfb is already running on display {display}")
-# except Exception:
-#     pass
-#
-# if not xvfb_running:
-#     print(f"[*] Xvfb not running, attempting to start it on {display}...")
-#     try:
-#         # Start Xvfb in background
-#         subprocess.Popen(
-#             ['Xvfb', display, '-screen', '0', '1920x1080x24', '-ac', '+extension', 'GLX', '+render', '-noreset'],
-#             stdout=subprocess.DEVNULL,
-#             stderr=subprocess.DEVNULL
-#         )
-#         print(f"[+] Started Xvfb on {display}")
-#         time.sleep(5)  # Wait longer for Xvfb to fully initialize
-#         print(f"[+] Xvfb initialization wait complete")
-#     except Exception as e:
-#         print(f"[!] Could not start Xvfb: {e}")
-#         print("[!] WARNING: Continuing without Xvfb verification...")
-# ============================================
-
-# Start Pure CDP Mode (No WebDriver footprint!)
-print(f"[*] Opening Google search with Pure CDP Mode...")
-print(f"[*] Searching for: {search_query}")
-if proxy_string:
-    print(f"[*] Using proxy: {proxy_string.split('@')[-1] if '@' in proxy_string else proxy_string}")
-
-# Build Chrome options
-# headless2 = new Chrome headless mode (harder to detect than old headless)
+# Chrome configuration
 chrome_kwargs = {
     "incognito": True,
     "ad_block": True,
     "headless": False,
     "headless2": True,  # New headless mode - harder to detect
-    "binary_location": "/usr/bin/google-chrome-stable",  # Explicit Chrome path
+    "binary_location": "/usr/bin/google-chrome-stable",
 }
 
-# Add ESSENTIAL Chrome flags for Fly.io cloud environment
-# These are REQUIRED - Chrome will crash without them in restrictive cloud environments
+# Add essential Chrome flags for cloud environments
 chrome_kwargs["chromium_arg"] = [
-    "--no-sandbox",              # Required: Fly.io doesn't allow sandbox
-    "--disable-dev-shm-usage",   # Required: Limited /dev/shm in containers
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
 ]
-print("[*] Using headless2 mode with explicit Chrome binary location")
 
 # Add proxy if provided
-if proxy_string:
-    chrome_kwargs["proxy"] = proxy_string
-
-# Enable built-in SeleniumBase features:
-# - ad_block=True: Automatically blocks ads and some popups
-# - incognito=True: Private browsing mode
-# - proxy: Optional proxy with authentication support
-# - Popup blocking: Enabled by default in Chrome settings
-
-print(f"[*] Launching Chrome with kwargs: {chrome_kwargs}")
-
-# Add debug info before launching
-print(f"[DEBUG] Checking Chrome binary...")
-import os
-chrome_path = "/usr/bin/google-chrome-stable"
-if os.path.exists(chrome_path):
-    print(f"[DEBUG] Chrome binary exists at {chrome_path}")
-    print(f"[DEBUG] Chrome is executable: {os.access(chrome_path, os.X_OK)}")
-else:
-    print(f"[DEBUG] Chrome binary NOT FOUND at {chrome_path}")
-
-print(f"[DEBUG] Environment: DISPLAY={os.environ.get('DISPLAY', 'not set')}")
-print(f"[DEBUG] Current user: {os.environ.get('USER', 'unknown')}")
+if args.proxy:
+    chrome_kwargs["proxy"] = args.proxy
 
 try:
-    # Try to get Chrome version
-    result = subprocess.run([chrome_path, '--version'], capture_output=True, text=True, timeout=5)
-    print(f"[DEBUG] Chrome version: {result.stdout.strip()}")
-    if result.stderr:
-        print(f"[DEBUG] Chrome stderr: {result.stderr}")
-except Exception as ve:
-    print(f"[DEBUG] Could not get Chrome version: {ve}")
+    # Launch Chrome with CDP
+    sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
 
-# Try to launch Chrome directly to see actual error
-print(f"[DEBUG] Testing Chrome launch directly...")
-try:
-    test_result = subprocess.run(
-        [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--dump-dom', 'about:blank'],
-        capture_output=True, text=True, timeout=10
-    )
-    print(f"[DEBUG] Direct Chrome test - Return code: {test_result.returncode}")
-    if test_result.stderr:
-        print(f"[DEBUG] Direct Chrome stderr: {test_result.stderr[:500]}")
-except Exception as te:
-    print(f"[DEBUG] Direct Chrome test failed: {te}")
+    # Wait for page to load
+    sb.sleep(3)
 
-print(f"[DEBUG] Attempting to launch Chrome...")
-try:
-    sb = sb_cdp.Chrome(search_url, **chrome_kwargs)
-    print(f"[DEBUG] Chrome launched successfully!")
-except Exception as e:
-    print(f"[!] ERROR launching Chrome: {e}")
-    print(f"[!] Error type: {type(e).__name__}")
-    import traceback
-    print(f"[DEBUG] Full traceback:")
-    traceback.print_exc()
+    # ============================================
+    # Handle Google Cookie Consent
+    # ============================================
+    def handle_google_cookie_consent():
+        """Handle Google cookie consent banner"""
+        reject_selector = '#L2AGLb'  # "Reject all" button
+        accept_selector = '#WOwltc'  # "Accept all" button
 
-    # Try to get more info about the error
-    print(f"\n[DEBUG] Additional debugging info:")
-    print(f"  - Chrome binary: {chrome_path}")
-    print(f"  - Binary exists: {os.path.exists(chrome_path)}")
-    print(f"  - Binary executable: {os.access(chrome_path, os.X_OK)}")
-    print(f"  - ChromeDriver in PATH: {subprocess.run(['which', 'chromedriver'], capture_output=True, text=True).stdout.strip()}")
-    raise
+        # Randomly accept or reject (50/50 chance) to appear more human
+        import random
+        if random.choice([True, False]):
+            if sb.click_if_visible(reject_selector, timeout=1):
+                sb.sleep(1)
+                return True
+            elif sb.click_if_visible(accept_selector, timeout=1):
+                sb.sleep(1)
+                return True
+        else:
+            if sb.click_if_visible(accept_selector, timeout=1):
+                sb.sleep(1)
+                return True
+            elif sb.click_if_visible(reject_selector, timeout=1):
+                sb.sleep(1)
+                return True
+        return False
 
-# Wait for page to fully load
-sb.sleep(3)
+    # ============================================
+    # Dismiss Popups and Dialogs
+    # ============================================
+    def dismiss_popups_and_dialogs():
+        """Dismiss all popups, dialogs, and permission prompts"""
+        selectors = [
+            # Google-specific
+            'g-raised-button[jsaction="click:O6N1Pb"]',
+            '.mpQYc g-raised-button',
+            '[role="dialog"] .mpQYc [role="button"]',
+            # Permission buttons
+            'button[aria-label*="Block"]',
+            'button[aria-label*="Don\'t allow"]',
+            'button[data-value="Block"]',
+            # Generic close buttons
+            '[data-value="Decline"]',
+            'button[aria-label="No thanks"]',
+            '.modal button[aria-label="Close"]',
+            '.close-button',
+        ]
 
-# ============================================
-# Handle Google Cookie Consent
-# ============================================
-def handle_google_cookie_consent():
-    """Handle Google cookie consent banner - randomly accepts or rejects (50/50)"""
-    print("[*] Checking for Google cookie consent...")
-    
-    # Google Cookie Consent Selectors
-    reject_selector = '#L2AGLb'  # "Reject all" button
-    accept_selector = '#WOwltc'  # "Accept all" button
-    
-    # Randomly accept or reject (50/50 chance) to appear more human
-    if random.choice([True, False]):
-        # Try to reject first
-        if sb.click_if_visible(reject_selector, timeout=1):
-            print("[+] Clicked 'Reject all' on cookie consent")
-            sb.sleep(1)
-            return True
-        elif sb.click_if_visible(accept_selector, timeout=1):
-            print("[+] Clicked 'Accept all' on cookie consent")
-            sb.sleep(1)
-            return True
-    else:
-        # Try to accept first
-        if sb.click_if_visible(accept_selector, timeout=1):
-            print("[+] Clicked 'Accept all' on cookie consent")
-            sb.sleep(1)
-            return True
-        elif sb.click_if_visible(reject_selector, timeout=1):
-            print("[+] Clicked 'Reject all' on cookie consent")
-            sb.sleep(1)
-            return True
-    
-    return False
+        for selector in selectors:
+            try:
+                if sb.click_if_visible(selector, timeout=0.5):
+                    sb.sleep(0.5)
+            except:
+                continue
 
-# ============================================
-# Dismiss Popups and Dialogs
-# ============================================
-def dismiss_popups_and_dialogs():
-    """Dismiss all popups, dialogs, and permission prompts"""
-    print("[*] Dismissing popups and dialogs...")
-    
-    # Google-Specific Dialogs (Location/permissions prompts)
-    google_selectors = [
-        'g-raised-button[jsaction="click:O6N1Pb"]',
-        '.mpQYc g-raised-button',
-        '[role="dialog"] .mpQYc [role="button"]',
-    ]
-    
-    # Permission blocking buttons
-    permission_selectors = [
-        'button[aria-label*="Block"]',
-        'button[aria-label*="Don\'t allow"]',
-        'button[aria-label*="Deny"]',
-        'button[data-value="Block"]',
-        'button[data-value="Deny"]',
-    ]
-    
-    # Generic Decline/Dismiss Buttons
-    decline_selectors = [
-        '[data-value="Decline"]',
-        '[data-value="Not now"]',
-        'button[aria-label="No thanks"]',
-        'button[aria-label="Decline"]',
-    ]
-    
-    # Generic Modal/Popup Close Buttons
-    close_selectors = [
-        '.modal button[aria-label="Close"]',
-        '.popup button[aria-label="Close"]',
-        '.close-button',
-        '.dismiss-button',
-    ]
-    
-    # Combine all selectors
-    all_selectors = google_selectors + permission_selectors + decline_selectors + close_selectors
-    
-    dismissed = False
-    for selector in all_selectors:
-        try:
-            if sb.click_if_visible(selector, timeout=0.5):
-                print(f"[+] Dismissed popup: {selector}")
-                sb.sleep(0.5)
-                dismissed = True
-        except:
-            continue
-    
-    # Fallback: Press ESC key using page keyboard API
-    if not dismissed:
-        try:
-            sb.loop.run_until_complete(sb.page.keyboard.press('Escape'))
-            print("[+] Pressed ESC key as fallback")
-            sb.sleep(0.5)
-        except:
-            pass
-    
-    return dismissed
-
-# Handle cookie consent first
-handle_google_cookie_consent()
-
-# Get page title and URL
-current_url = sb.get_current_url()
-print(f"[*] Page Title: {sb.get_title()}")
-print(f"[*] Current URL: {current_url}")
-
-# Verify we're on search results page
-if "/search?q=" in current_url:
-    print("[+] Successfully loaded search results!")
-    # Dismiss any popups/dialogs after results load
+    # Handle cookie consent and popups
+    handle_google_cookie_consent()
     dismiss_popups_and_dialogs()
-else:
-    print("[!] WARNING: Not on search results page!")
 
-# Scroll to bottom to load all results
-print("[*] Scrolling page to load all results...")
-sb.scroll_to_bottom()
-sb.sleep(1)
-sb.scroll_to_top()
-sb.sleep(1)
+    # Scroll page (appears more human)
+    sb.scroll_to_bottom()
+    sb.sleep(1)
+    sb.scroll_to_top()
+    sb.sleep(1)
 
-# Highlight first result
-print("[*] Highlighting first search result...")
-try:
-    if sb.is_element_visible("h3"):
-        sb.highlight("h3")
-        first_result = sb.get_text("h3")
-        print(f"[*] First result: {first_result}")
+    # Get final URL (after redirects)
+    final_url = sb.get_current_url()
+
+    # Get page HTML
+    page_html = sb.get_page_source()
+
+    # Take screenshot if requested
+    screenshot_base64 = None
+    if not args.no_screenshot:
+        # Capture full page screenshot
+        screenshot_bytes = sb.loop.run_until_complete(
+            sb.page.screenshot(full_page=True, type='png')
+        )
+        # Convert to base64
+        screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+
+    # Build response
+    response = {
+        "success": True,
+        "url": final_url,
+        "html": page_html,
+    }
+
+    # Add optional fields
+    if screenshot_base64:
+        response["screenshot_base64"] = screenshot_base64
+
+    if query_string:
+        response["query"] = query_string
+
+    if args.proxy:
+        response["proxy"] = args.proxy
+
+    # Output JSON (API will parse this)
+    print(json.dumps(response))
+
+    # Clean up
+    sb.driver.stop()
+    sys.exit(0)
+
 except Exception as e:
-    print(f"[!] Could not find h3 elements: {e}")
-
-# Take FULL PAGE screenshot using the async method directly
-print("[*] Taking FULL PAGE screenshot (entire scrollable page)...")
-# Use the async method to get true full page screenshot
-# Save to /app/ directory (works in both Docker and Fly.io)
-screenshot_path = "/app/google_search_full_page.png"
-sb.loop.run_until_complete(
-    sb.page.save_screenshot(screenshot_path, full_page=True)
-)
-
-# Regular viewport screenshot only (commented out)
-# sb.save_screenshot("google_search_full_page.png")
-
-# Save as PDF too
-# print("[*] Saving as PDF...")
-# sb.save_as_pdf("google_search_results.pdf")
-
-# Save HTML source
-# print("[*] Saving page HTML...")
-# sb.save_page_source("google_search_source.html")
-
-# Get all search result titles
-print("\n[*] All search results:")
-try:
-    results = sb.find_elements("h3")
-    for i, result in enumerate(results[:10], 1):
-        try:
-            text = result.text.strip()
-            if text:
-                print(f"  {i}. {text}")
-        except:
-            pass
-except Exception as e:
-    print(f"[!] Could not get search results: {e}")
-
-print("\n[*] Bot evasion test complete!")
-print(f"[*] Screenshot saved: {screenshot_path}")
-# print("    - google_search_results.pdf (PDF)")
-# print("    - google_search_source.html (HTML)")
-
-# Keep browser open for 5 seconds so you can see it
-sb.sleep(5)
-sb.driver.stop()
+    # Output error as JSON
+    error_response = {
+        "success": False,
+        "error": str(e),
+        "url": args.url if args.url else f"Google search: {args.query}"
+    }
+    print(json.dumps(error_response))
+    sys.exit(1)
