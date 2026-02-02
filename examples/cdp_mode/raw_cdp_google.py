@@ -68,11 +68,12 @@ if proxy_string:
     print(f"[*] Using proxy: {proxy_string.split('@')[-1] if '@' in proxy_string else proxy_string}")
 
 # Build Chrome options
-# Explicitly set Chrome binary location (fixes "cannot connect" in containers)
+# headless2 = new Chrome headless mode (harder to detect than old headless)
 chrome_kwargs = {
     "incognito": True,
     "ad_block": True,
-    "headless": True,  # Regular headless mode - most compatible
+    "headless": False,
+    "headless2": True,  # New headless mode - harder to detect
     "binary_location": "/usr/bin/google-chrome-stable",  # Explicit Chrome path
 }
 
@@ -81,9 +82,8 @@ chrome_kwargs = {
 chrome_kwargs["chromium_arg"] = [
     "--no-sandbox",              # Required: Fly.io doesn't allow sandbox
     "--disable-dev-shm-usage",   # Required: Limited /dev/shm in containers
-    "--disable-gpu",             # Disable GPU in headless
 ]
-print("[*] Using headless mode with explicit Chrome binary location")
+print("[*] Using headless2 mode with explicit Chrome binary location")
 
 # Add proxy if provided
 if proxy_string:
