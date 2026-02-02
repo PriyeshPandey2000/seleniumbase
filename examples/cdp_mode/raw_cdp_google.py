@@ -20,40 +20,46 @@ proxy_string = args.proxy
 # Use your full search URL directly
 search_url = f"https://www.google.com/search?q={search_query}&oq={search_query}&sourceid=chrome&ie=UTF-8"
 
-# Check DISPLAY environment variable
-display = os.environ.get('DISPLAY', ':100')
-print(f"[*] DISPLAY environment variable: {display}")
-
-# Try to start Xvfb if it's not running (for docker-compose run scenarios)
-import subprocess
-xvfb_running = False
-try:
-    result = subprocess.run(
-        ['pgrep', '-f', f'Xvfb {display}'],
-        capture_output=True,
-        timeout=1
-    )
-    if result.returncode == 0:
-        xvfb_running = True
-        print(f"[+] Xvfb is already running on display {display}")
-except Exception:
-    pass
-
-if not xvfb_running:
-    print(f"[*] Xvfb not running, attempting to start it on {display}...")
-    try:
-        # Start Xvfb in background
-        subprocess.Popen(
-            ['Xvfb', display, '-screen', '0', '1920x1080x24', '-ac', '+extension', 'GLX', '+render', '-noreset'],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        print(f"[+] Started Xvfb on {display}")
-        time.sleep(5)  # Wait longer for Xvfb to fully initialize
-        print(f"[+] Xvfb initialization wait complete")
-    except Exception as e:
-        print(f"[!] Could not start Xvfb: {e}")
-        print("[!] WARNING: Continuing without Xvfb verification...")
+# ============================================
+# Xvfb Setup (COMMENTED OUT - Using headless2 instead)
+# ============================================
+# Uncomment this section if you need headful mode (headless=False) with Xvfb
+#
+# # Check DISPLAY environment variable
+# display = os.environ.get('DISPLAY', ':100')
+# print(f"[*] DISPLAY environment variable: {display}")
+#
+# # Try to start Xvfb if it's not running (for docker-compose run scenarios)
+# import subprocess
+# xvfb_running = False
+# try:
+#     result = subprocess.run(
+#         ['pgrep', '-f', f'Xvfb {display}'],
+#         capture_output=True,
+#         timeout=1
+#     )
+#     if result.returncode == 0:
+#         xvfb_running = True
+#         print(f"[+] Xvfb is already running on display {display}")
+# except Exception:
+#     pass
+#
+# if not xvfb_running:
+#     print(f"[*] Xvfb not running, attempting to start it on {display}...")
+#     try:
+#         # Start Xvfb in background
+#         subprocess.Popen(
+#             ['Xvfb', display, '-screen', '0', '1920x1080x24', '-ac', '+extension', 'GLX', '+render', '-noreset'],
+#             stdout=subprocess.DEVNULL,
+#             stderr=subprocess.DEVNULL
+#         )
+#         print(f"[+] Started Xvfb on {display}")
+#         time.sleep(5)  # Wait longer for Xvfb to fully initialize
+#         print(f"[+] Xvfb initialization wait complete")
+#     except Exception as e:
+#         print(f"[!] Could not start Xvfb: {e}")
+#         print("[!] WARNING: Continuing without Xvfb verification...")
+# ============================================
 
 # Start Pure CDP Mode (No WebDriver footprint!)
 print(f"[*] Opening Google search with Pure CDP Mode...")
@@ -62,13 +68,14 @@ if proxy_string:
     print(f"[*] Using proxy: {proxy_string.split('@')[-1] if '@' in proxy_string else proxy_string}")
 
 # Build Chrome options
-# Keep it simple - SeleniumBase CDP mode handles containerized environments internally!
+# Use headless2 (new headless mode) - harder to detect, no Xvfb needed
 chrome_kwargs = {
     "incognito": True,
     "ad_block": True,
-    "headless": False,  # Headful mode for CAPTCHA bypass (requires Xvfb)
+    "headless": False,
+    "headless2": True,  # New headless mode - harder to detect than old headless
 }
-print("[*] Using headful mode with minimal config (SeleniumBase handles container flags)")
+print("[*] Using headless2 mode (new headless - harder to detect, no Xvfb needed)")
 
 # Add proxy if provided
 if proxy_string:

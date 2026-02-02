@@ -107,26 +107,35 @@ ENV DISPLAY=:100
 EXPOSE 5000
 
 #==================
-# Run API in Headful Mode with Xvfb
+# Run API with headless2 (no Xvfb needed!)
 #==================
+# For headful mode with Xvfb, use this instead:
+# CMD ["sh", "-c", "\
+#     echo '========================================' && \
+#     echo 'Starting Xvfb virtual display...' && \
+#     echo '========================================' && \
+#     Xvfb :100 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
+#     XVFB_PID=$! && \
+#     echo \"Xvfb started with PID: $XVFB_PID\" && \
+#     echo 'Waiting for Xvfb to fully initialize...' && \
+#     sleep 5 && \
+#     echo 'Verifying Xvfb is running...' && \
+#     if ps -p $XVFB_PID > /dev/null; then \
+#         echo 'Xvfb is running successfully' && \
+#         echo '========================================' && \
+#         echo 'Starting Flask API Server...' && \
+#         echo '========================================' && \
+#         python3 /app/api_google_search.py; \
+#     else \
+#         echo 'ERROR: Xvfb failed to start!' && \
+#         exit 1; \
+#     fi \
+#     "]
+
 CMD ["sh", "-c", "\
     echo '========================================' && \
-    echo 'Starting Xvfb virtual display...' && \
+    echo 'Starting Flask API Server...' && \
+    echo 'Using headless2 mode (new headless)' && \
     echo '========================================' && \
-    Xvfb :100 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
-    XVFB_PID=$! && \
-    echo \"Xvfb started with PID: $XVFB_PID\" && \
-    echo 'Waiting for Xvfb to fully initialize...' && \
-    sleep 5 && \
-    echo 'Verifying Xvfb is running...' && \
-    if ps -p $XVFB_PID > /dev/null; then \
-        echo 'Xvfb is running successfully' && \
-        echo '========================================' && \
-        echo 'Starting Flask API Server...' && \
-        echo '========================================' && \
-        python3 /app/api_google_search.py; \
-    else \
-        echo 'ERROR: Xvfb failed to start!' && \
-        exit 1; \
-    fi \
+    python3 /app/api_google_search.py \
     "]
