@@ -1,0 +1,119 @@
+# Slim Dockerfile for Google Search - Headful Mode with Xvfb
+FROM ubuntu:22.04
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+#======================
+# Locale Configuration
+#======================
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    tzdata \
+    locales && \
+    sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
+    locale-gen && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV TZ=America/New_York
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+#============================
+# Install Chrome Dependencies
+#============================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    gnupg \
+    ca-certificates \
+    # Chrome runtime dependencies
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    # Xvfb for headful mode
+    xvfb \
+    # Python
+    python3 \
+    python3-pip \
+    python3-tk \
+    python3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+#================
+# Install Chrome
+#================
+RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt-get update && \
+    apt-get install -y ./google-chrome-stable_current_amd64.deb && \
+    rm ./google-chrome-stable_current_amd64.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+#=====================
+# Install Python Packages (MINIMAL - Package Only!)
+#=====================
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir \
+    seleniumbase \
+    flask
+
+#=======================
+# Download chromedriver
+#=======================
+RUN seleniumbase get chromedriver --path
+
+#==================
+# Set up work directory
+#==================
+WORKDIR /app
+
+# Create output directory for screenshots, PDFs, etc.
+RUN mkdir -p /app/output
+
+# Copy test and Google scripts
+COPY test_chromium.py /app/
+COPY raw_cdp_google_submit_docker.py /app/
+COPY raw_cdp_google_submit.py /app/
+COPY raw_cdp_google.py /app/
+COPY api_google_search.py /app/
+
+#==================
+# Display Configuration
+#==================
+ENV DISPLAY=:100
+
+#==================
+# Expose API port
+#==================
+EXPOSE 5000
+
+#==================
+# Run API in Headful Mode with Xvfb
+#==================
+CMD ["sh", "-c", "\
+    echo '========================================' && \
+    echo 'Starting Xvfb virtual display...' && \
+    echo '========================================' && \
+    Xvfb :100 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & \
+    echo 'Waiting for Xvfb to initialize...' && \
+    sleep 3 && \
+    echo '========================================' && \
+    echo 'Starting Flask API Server...' && \
+    echo '========================================' && \
+    python3 /app/api_google_search.py \
+    "]
