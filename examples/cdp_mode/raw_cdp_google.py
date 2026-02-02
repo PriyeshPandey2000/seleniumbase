@@ -5,7 +5,7 @@ import argparse
 import os
 import json
 import base64
-import io
+import subprocess
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='CDP Mode Web Scraper')
@@ -54,6 +54,15 @@ if args.proxy:
     chrome_kwargs["proxy"] = args.proxy
 
 try:
+    # Warm up Chrome (critical for Fly.io - prevents SIGPIPE crash)
+    # This initializes Chrome's cache/profile before CDP connects
+    chrome_path = "/usr/bin/google-chrome-stable"
+    subprocess.run(
+        [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--version'],
+        capture_output=True,
+        timeout=5
+    )
+
     # Launch Chrome with CDP
     sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
 
