@@ -142,12 +142,23 @@ try:
     # Take screenshot if requested
     screenshot_base64 = None
     if not args.no_screenshot:
+        # Save screenshot to temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+            tmp_path = tmp.name
+
         # Capture full page screenshot
-        screenshot_bytes = sb.loop.run_until_complete(
-            sb.page.screenshot(full_page=True, type='png')
+        sb.loop.run_until_complete(
+            sb.page.save_screenshot(tmp_path, full_page=True)
         )
-        # Convert to base64
-        screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+
+        # Read and convert to base64
+        with open(tmp_path, 'rb') as f:
+            screenshot_bytes = f.read()
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+
+        # Clean up temp file
+        os.remove(tmp_path)
 
     # Build response
     response = {
