@@ -59,6 +59,7 @@ def search():
         "query": "search term",    # Optional: searches Google
         "url": "https://...",      # Optional: scrape direct URL
         "proxy": "host:port",      # Optional
+        "user_agent": "...",       # Optional: custom user agent
         "screenshot": true         # Optional (default: true)
     }
 
@@ -92,6 +93,7 @@ def search():
 
         # Get optional parameters
         proxy = data.get('proxy')
+        user_agent = data.get('user_agent')
         screenshot = data.get('screenshot', True)  # Default to True
 
         # Build command
@@ -106,6 +108,8 @@ def search():
         # Add optional parameters
         if proxy:
             cmd.extend(['--proxy', proxy])
+        if user_agent:
+            cmd.extend(['--user-agent', user_agent])
         if not screenshot:
             cmd.append('--no-screenshot')
 

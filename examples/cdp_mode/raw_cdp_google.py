@@ -15,6 +15,8 @@ parser.add_argument('--url', type=str, default=None,
                     help='Direct URL to scrape')
 parser.add_argument('--proxy', type=str, default=None,
                     help='Proxy server. Format: "host:port" or "username:password@host:port"')
+parser.add_argument('--user-agent', type=str, default=None,
+                    help='Custom user agent string')
 parser.add_argument('--no-screenshot', action='store_true',
                     help='Skip screenshot capture')
 args = parser.parse_args()
@@ -52,6 +54,10 @@ chrome_kwargs["chromium_arg"] = [
 # Add proxy if provided
 if args.proxy:
     chrome_kwargs["proxy"] = args.proxy
+
+# Add user agent if provided
+if args.user_agent:
+    chrome_kwargs["user_agent"] = args.user_agent
 
 try:
     # Try to warm up Chrome (non-fatal if it fails)
