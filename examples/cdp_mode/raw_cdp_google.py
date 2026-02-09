@@ -39,11 +39,11 @@ else:
     sys.exit(1)
 
 # Chrome configuration (SAME for desktop and mobile)
-# Using headless=False with Xvfb reduces CAPTCHA by 40-60%!
 chrome_kwargs = {
     "incognito": True,
     "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
-    "headless": False,  # Headful mode with Xvfb (fewer CAPTCHAs!)
+    "headless": False,
+    "headless2": True,  # New headless mode - working for desktop
     "binary_location": "/usr/bin/google-chrome-stable",
 }
 
