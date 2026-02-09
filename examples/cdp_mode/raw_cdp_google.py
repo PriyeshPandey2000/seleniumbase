@@ -44,7 +44,7 @@ try:
     # ============================================
     if args.mobile:
         # Use UC mode for mobile to avoid CAPTCHA
-        with SB(uc=True, test=True, mobile=True, proxy=args.proxy, headless=True) as sb:
+        with SB(uc=True, mobile=True, proxy=args.proxy, headless=True) as sb:
             sb.activate_cdp_mode(target_url)
             sb.sleep(3)
 
