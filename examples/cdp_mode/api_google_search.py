@@ -32,7 +32,8 @@ def root():
                 "query": "best hotels",           # Search Google (optional)
                 "url": "https://example.com",     # OR direct URL (optional)
                 "proxy": "user:pass@host:port",   # Optional
-                "screenshot": True                # Optional (default: true)
+                "screenshot": True,               # Optional (default: true)
+                "mobile": False                   # Optional (default: false)
             }
         },
         "example_response": {
@@ -60,6 +61,7 @@ def search():
         "url": "https://...",      # Optional: scrape direct URL
         "proxy": "host:port",      # Optional
         "user_agent": "...",       # Optional: custom user agent
+        "mobile": false,           # Optional: enable mobile mode (default: false)
         "screenshot": true         # Optional (default: true)
     }
 
@@ -94,6 +96,7 @@ def search():
         # Get optional parameters
         proxy = data.get('proxy')
         user_agent = data.get('user_agent')
+        mobile = data.get('mobile', False)  # Default to False
         screenshot = data.get('screenshot', True)  # Default to True
 
         # Build command
@@ -110,6 +113,8 @@ def search():
             cmd.extend(['--proxy', proxy])
         if user_agent:
             cmd.extend(['--user-agent', user_agent])
+        if mobile:
+            cmd.append('--mobile')
         if not screenshot:
             cmd.append('--no-screenshot')
 
