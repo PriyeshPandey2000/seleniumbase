@@ -39,7 +39,7 @@ else:
 # Chrome configuration
 chrome_kwargs = {
     "incognito": True,
-    "ad_block": True,
+    "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
     "headless": False,
     "headless2": True,  # New headless mode - harder to detect
     "binary_location": "/usr/bin/google-chrome-stable",
