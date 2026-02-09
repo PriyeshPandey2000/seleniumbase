@@ -17,22 +17,18 @@ parser.add_argument('--proxy', type=str, default=None,
                     help='Proxy server. Format: "host:port" or "username:password@host:port"')
 parser.add_argument('--user-agent', type=str, default=None,
                     help='Custom user agent string')
-parser.add_argument('--mobile', action='store_true',
-                    help='Enable mobile mode emulation')
 parser.add_argument('--no-screenshot', action='store_true',
                     help='Skip screenshot capture')
 args = parser.parse_args()
 
-# Determine target URL and search mode
+# Determine target URL
 if args.url:
     target_url = args.url
     query_string = None
-    use_search_submit = False
 elif args.query:
-    # Use human-like approach: go to Google first, then search
+    # Build Google search URL
     query_string = args.query
-    target_url = "https://www.google.com/ncr"  # Start at Google homepage
-    use_search_submit = True
+    target_url = f"https://www.google.com/search?q={query_string}&sourceid=chrome&ie=UTF-8"
 else:
     print(json.dumps({
         "success": False,
@@ -40,18 +36,14 @@ else:
     }))
     sys.exit(1)
 
-# Chrome configuration (SAME for desktop and mobile)
+# Chrome configuration
 chrome_kwargs = {
     "incognito": True,
-    "ad_block": False,  # Disabled due to CDP compatibility
+    "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
     "headless": False,
-    "headless2": True,  # New headless mode - working for desktop
+    "headless2": True,  # New headless mode - harder to detect
+    "binary_location": "/usr/bin/google-chrome-stable",
 }
-
-# Add Chrome binary location only on Linux (Mac auto-detects)
-import platform
-if platform.system() == "Linux":
-    chrome_kwargs["binary_location"] = "/usr/bin/google-chrome-stable"
 
 # Add essential Chrome flags for cloud environments
 chrome_kwargs["chromium_arg"] = [
@@ -67,10 +59,6 @@ if args.proxy:
 if args.user_agent:
     chrome_kwargs["user_agent"] = args.user_agent
 
-# Add mobile mode if requested - ONLY DIFFERENCE
-if args.mobile:
-    chrome_kwargs["mobile"] = True
-
 try:
     # Try to warm up Chrome (non-fatal if it fails)
     chrome_path = "/usr/bin/google-chrome-stable"
@@ -85,7 +73,7 @@ try:
     except:
         pass  # Continue even if warmup fails
 
-    # Launch Chrome with CDP (SAME for both desktop and mobile)
+    # Launch Chrome with CDP
     sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
 
     # Wait for page to load
@@ -102,17 +90,17 @@ try:
         # Randomly accept or reject (50/50 chance) to appear more human
         import random
         if random.choice([True, False]):
-            if sb.click_if_visible(reject_selector):
+            if sb.click_if_visible(reject_selector, timeout=1):
                 sb.sleep(1)
                 return True
-            elif sb.click_if_visible(accept_selector):
+            elif sb.click_if_visible(accept_selector, timeout=1):
                 sb.sleep(1)
                 return True
         else:
-            if sb.click_if_visible(accept_selector):
+            if sb.click_if_visible(accept_selector, timeout=1):
                 sb.sleep(1)
                 return True
-            elif sb.click_if_visible(reject_selector):
+            elif sb.click_if_visible(reject_selector, timeout=1):
                 sb.sleep(1)
                 return True
         return False
@@ -140,7 +128,7 @@ try:
 
         for selector in selectors:
             try:
-                if sb.click_if_visible(selector):
+                if sb.click_if_visible(selector, timeout=0.5):
                     sb.sleep(0.5)
             except:
                 continue
@@ -148,18 +136,6 @@ try:
     # Handle cookie consent and popups
     handle_google_cookie_consent()
     dismiss_popups_and_dialogs()
-
-    # ============================================
-    # SEARCH SUBMIT (if using query)
-    # ============================================
-    if use_search_submit:
-        # Type search query into search box
-        sb.type('textarea[name="q"]', query_string)
-        sb.sleep(1)
-
-        # Submit search using submit() method (more human-like)
-        sb.submit('textarea[name="q"]')
-        sb.sleep(3)
 
     # Scroll page (appears more human)
     sb.scroll_to_bottom()
@@ -170,12 +146,8 @@ try:
     # Get final URL (after redirects)
     final_url = sb.get_current_url()
 
-    # Get page HTML (with fallback for older versions)
-    try:
-        page_html = sb.get_page_source()
-    except Exception:
-        # Older version - use direct CDP call
-        page_html = sb.loop.run_until_complete(sb.page.get_content())
+    # Get page HTML
+    page_html = sb.get_page_source()
 
     # Take screenshot if requested
     screenshot_base64 = None
