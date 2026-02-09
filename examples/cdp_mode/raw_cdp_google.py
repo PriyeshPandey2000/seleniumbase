@@ -1,5 +1,5 @@
 """CDP Mode Web Scraper - Returns JSON output"""
-from seleniumbase import sb_cdp, SB
+from seleniumbase import sb_cdp
 import sys
 import argparse
 import os
@@ -38,261 +38,167 @@ else:
     }))
     sys.exit(1)
 
+# Chrome configuration (SAME for desktop and mobile)
+# Using headless=False with Xvfb reduces CAPTCHA by 40-60%!
+chrome_kwargs = {
+    "incognito": True,
+    "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
+    "headless": False,  # Headful mode with Xvfb (fewer CAPTCHAs!)
+    "binary_location": "/usr/bin/google-chrome-stable",
+}
+
+# Add essential Chrome flags for cloud environments
+chrome_kwargs["chromium_arg"] = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+]
+
+# Add proxy if provided
+if args.proxy:
+    chrome_kwargs["proxy"] = args.proxy
+
+# Add user agent if provided
+if args.user_agent:
+    chrome_kwargs["user_agent"] = args.user_agent
+
+# Add mobile mode if requested - ONLY DIFFERENCE
+if args.mobile:
+    chrome_kwargs["mobile"] = True
+
 try:
-    # ============================================
-    # MOBILE MODE - Use UC Mode + CDP for anti-detection
-    # ============================================
-    if args.mobile:
-        # Use UC mode for mobile to avoid CAPTCHA
-        with SB(uc=True, mobile=True, proxy=args.proxy, headless=True) as sb:
-            sb.activate_cdp_mode(target_url)
-            sb.sleep(3)
+    # Try to warm up Chrome (non-fatal if it fails)
+    chrome_path = "/usr/bin/google-chrome-stable"
+    try:
+        subprocess.run(
+            [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+             '--dump-dom', 'about:blank'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+    except:
+        pass  # Continue even if warmup fails
 
-            # Handle cookie consent and popups
-            def handle_google_cookie_consent():
-                """Handle Google cookie consent banner"""
-                reject_selector = '#L2AGLb'  # "Reject all" button
-                accept_selector = '#WOwltc'  # "Accept all" button
+    # Launch Chrome with CDP (SAME for both desktop and mobile)
+    sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
 
-                import random
-                if random.choice([True, False]):
-                    if sb.click_if_visible(reject_selector, timeout=1):
-                        sb.sleep(1)
-                        return True
-                    elif sb.click_if_visible(accept_selector, timeout=1):
-                        sb.sleep(1)
-                        return True
-                else:
-                    if sb.click_if_visible(accept_selector, timeout=1):
-                        sb.sleep(1)
-                        return True
-                    elif sb.click_if_visible(reject_selector, timeout=1):
-                        sb.sleep(1)
-                        return True
-                return False
-
-            def dismiss_popups_and_dialogs():
-                """Dismiss all popups, dialogs, and permission prompts"""
-                selectors = [
-                    'g-raised-button[jsaction="click:O6N1Pb"]',
-                    '.mpQYc g-raised-button',
-                    '[role="dialog"] .mpQYc [role="button"]',
-                    'button[aria-label*="Block"]',
-                    'button[aria-label*="Don\'t allow"]',
-                    'button[data-value="Block"]',
-                    '[data-value="Decline"]',
-                    'button[aria-label="No thanks"]',
-                    '.modal button[aria-label="Close"]',
-                    '.close-button',
-                ]
-                for selector in selectors:
-                    try:
-                        if sb.click_if_visible(selector, timeout=0.5):
-                            sb.sleep(0.5)
-                    except:
-                        continue
-
-            handle_google_cookie_consent()
-            dismiss_popups_and_dialogs()
-
-            # Scroll page
-            sb.scroll_to_bottom()
-            sb.sleep(1)
-            sb.scroll_to_top()
-            sb.sleep(1)
-
-            # Get data
-            final_url = sb.get_current_url()
-            page_html = sb.get_page_source()
-
-            # Take screenshot if requested
-            screenshot_base64 = None
-            if not args.no_screenshot:
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    tmp_path = tmp.name
-
-                sb.save_screenshot(tmp_path)
-
-                with open(tmp_path, 'rb') as f:
-                    screenshot_bytes = f.read()
-                    screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-
-                os.remove(tmp_path)
-
-            # Build response
-            response = {
-                "success": True,
-                "url": final_url,
-                "html": page_html,
-            }
-
-            if screenshot_base64:
-                response["screenshot_base64"] = screenshot_base64
-            if query_string:
-                response["query"] = query_string
-            if args.proxy:
-                response["proxy"] = args.proxy
-
-            print(json.dumps(response))
-            sys.exit(0)
+    # Wait for page to load
+    sb.sleep(3)
 
     # ============================================
-    # DESKTOP MODE - Keep existing working logic
+    # Handle Google Cookie Consent
     # ============================================
-    else:
-        # Chrome configuration for desktop
-        chrome_kwargs = {
-            "incognito": True,
-            "ad_block": False if args.proxy else True,
-            "headless": False,
-            "headless2": True,  # Works for desktop
-            "binary_location": "/usr/bin/google-chrome-stable",
-        }
+    def handle_google_cookie_consent():
+        """Handle Google cookie consent banner"""
+        reject_selector = '#L2AGLb'  # "Reject all" button
+        accept_selector = '#WOwltc'  # "Accept all" button
 
-        # Add essential Chrome flags for cloud environments
-        chrome_kwargs["chromium_arg"] = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
+        # Randomly accept or reject (50/50 chance) to appear more human
+        import random
+        if random.choice([True, False]):
+            if sb.click_if_visible(reject_selector, timeout=1):
+                sb.sleep(1)
+                return True
+            elif sb.click_if_visible(accept_selector, timeout=1):
+                sb.sleep(1)
+                return True
+        else:
+            if sb.click_if_visible(accept_selector, timeout=1):
+                sb.sleep(1)
+                return True
+            elif sb.click_if_visible(reject_selector, timeout=1):
+                sb.sleep(1)
+                return True
+        return False
+
+    # ============================================
+    # Dismiss Popups and Dialogs
+    # ============================================
+    def dismiss_popups_and_dialogs():
+        """Dismiss all popups, dialogs, and permission prompts"""
+        selectors = [
+            # Google-specific
+            'g-raised-button[jsaction="click:O6N1Pb"]',
+            '.mpQYc g-raised-button',
+            '[role="dialog"] .mpQYc [role="button"]',
+            # Permission buttons
+            'button[aria-label*="Block"]',
+            'button[aria-label*="Don\'t allow"]',
+            'button[data-value="Block"]',
+            # Generic close buttons
+            '[data-value="Decline"]',
+            'button[aria-label="No thanks"]',
+            '.modal button[aria-label="Close"]',
+            '.close-button',
         ]
 
-        # Add proxy if provided
-        if args.proxy:
-            chrome_kwargs["proxy"] = args.proxy
+        for selector in selectors:
+            try:
+                if sb.click_if_visible(selector, timeout=0.5):
+                    sb.sleep(0.5)
+            except:
+                continue
 
-        # Add user agent if provided
-        if args.user_agent:
-            chrome_kwargs["user_agent"] = args.user_agent
+    # Handle cookie consent and popups
+    handle_google_cookie_consent()
+    dismiss_popups_and_dialogs()
 
-        # Try to warm up Chrome (non-fatal if it fails)
-        chrome_path = "/usr/bin/google-chrome-stable"
-        try:
-            subprocess.run(
-                [chrome_path, '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
-                 '--dump-dom', 'about:blank'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-        except:
-            pass  # Continue even if warmup fails
+    # Scroll page (appears more human)
+    sb.scroll_to_bottom()
+    sb.sleep(1)
+    sb.scroll_to_top()
+    sb.sleep(1)
 
-        # Launch Chrome with CDP
-        sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
+    # Get final URL (after redirects)
+    final_url = sb.get_current_url()
 
-        # Wait for page to load
-        sb.sleep(3)
+    # Get page HTML
+    page_html = sb.get_page_source()
 
-        # Handle Google Cookie Consent
-        def handle_google_cookie_consent():
-            """Handle Google cookie consent banner"""
-            reject_selector = '#L2AGLb'  # "Reject all" button
-            accept_selector = '#WOwltc'  # "Accept all" button
+    # Take screenshot if requested
+    screenshot_base64 = None
+    if not args.no_screenshot:
+        # Save screenshot to temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+            tmp_path = tmp.name
 
-            # Randomly accept or reject (50/50 chance) to appear more human
-            import random
-            if random.choice([True, False]):
-                if sb.click_if_visible(reject_selector, timeout=1):
-                    sb.sleep(1)
-                    return True
-                elif sb.click_if_visible(accept_selector, timeout=1):
-                    sb.sleep(1)
-                    return True
-            else:
-                if sb.click_if_visible(accept_selector, timeout=1):
-                    sb.sleep(1)
-                    return True
-                elif sb.click_if_visible(reject_selector, timeout=1):
-                    sb.sleep(1)
-                    return True
-            return False
+        # Capture full page screenshot
+        sb.loop.run_until_complete(
+            sb.page.save_screenshot(tmp_path, full_page=True)
+        )
 
-        # Dismiss Popups and Dialogs
-        def dismiss_popups_and_dialogs():
-            """Dismiss all popups, dialogs, and permission prompts"""
-            selectors = [
-                # Google-specific
-                'g-raised-button[jsaction="click:O6N1Pb"]',
-                '.mpQYc g-raised-button',
-                '[role="dialog"] .mpQYc [role="button"]',
-                # Permission buttons
-                'button[aria-label*="Block"]',
-                'button[aria-label*="Don\'t allow"]',
-                'button[data-value="Block"]',
-                # Generic close buttons
-                '[data-value="Decline"]',
-                'button[aria-label="No thanks"]',
-                '.modal button[aria-label="Close"]',
-                '.close-button',
-            ]
+        # Read and convert to base64
+        with open(tmp_path, 'rb') as f:
+            screenshot_bytes = f.read()
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
 
-            for selector in selectors:
-                try:
-                    if sb.click_if_visible(selector, timeout=0.5):
-                        sb.sleep(0.5)
-                except:
-                    continue
+        # Clean up temp file
+        os.remove(tmp_path)
 
-        # Handle cookie consent and popups
-        handle_google_cookie_consent()
-        dismiss_popups_and_dialogs()
+    # Build response
+    response = {
+        "success": True,
+        "url": final_url,
+        "html": page_html,
+    }
 
-        # Scroll page (appears more human)
-        sb.scroll_to_bottom()
-        sb.sleep(1)
-        sb.scroll_to_top()
-        sb.sleep(1)
+    # Add optional fields
+    if screenshot_base64:
+        response["screenshot_base64"] = screenshot_base64
 
-        # Get final URL (after redirects)
-        final_url = sb.get_current_url()
+    if query_string:
+        response["query"] = query_string
 
-        # Get page HTML
-        page_html = sb.get_page_source()
+    if args.proxy:
+        response["proxy"] = args.proxy
 
-        # Take screenshot if requested
-        screenshot_base64 = None
-        if not args.no_screenshot:
-            # Save screenshot to temp file
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                tmp_path = tmp.name
+    # Output JSON (API will parse this)
+    print(json.dumps(response))
 
-            # Capture full page screenshot
-            sb.loop.run_until_complete(
-                sb.page.save_screenshot(tmp_path, full_page=True)
-            )
-
-            # Read and convert to base64
-            with open(tmp_path, 'rb') as f:
-                screenshot_bytes = f.read()
-                screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-
-            # Clean up temp file
-            os.remove(tmp_path)
-
-        # Build response
-        response = {
-            "success": True,
-            "url": final_url,
-            "html": page_html,
-        }
-
-        # Add optional fields
-        if screenshot_base64:
-            response["screenshot_base64"] = screenshot_base64
-
-        if query_string:
-            response["query"] = query_string
-
-        if args.proxy:
-            response["proxy"] = args.proxy
-
-        # Output JSON (API will parse this)
-        print(json.dumps(response))
-
-        # Clean up
-        sb.driver.stop()
-        sys.exit(0)
+    # Clean up
+    sb.driver.stop()
+    sys.exit(0)
 
 except Exception as e:
     # Output error as JSON
