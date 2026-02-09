@@ -23,14 +23,16 @@ parser.add_argument('--no-screenshot', action='store_true',
                     help='Skip screenshot capture')
 args = parser.parse_args()
 
-# Determine target URL
+# Determine target URL and search mode
 if args.url:
     target_url = args.url
     query_string = None
+    use_search_submit = False
 elif args.query:
-    # Build Google search URL
+    # Use human-like approach: go to Google first, then search
     query_string = args.query
-    target_url = f"https://www.google.com/search?q={query_string}&sourceid=chrome&ie=UTF-8"
+    target_url = "https://www.google.com/ncr"  # Start at Google homepage
+    use_search_submit = True
 else:
     print(json.dumps({
         "success": False,
@@ -41,11 +43,15 @@ else:
 # Chrome configuration (SAME for desktop and mobile)
 chrome_kwargs = {
     "incognito": True,
-    "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
+    "ad_block": False,  # Disabled due to CDP compatibility
     "headless": False,
     "headless2": True,  # New headless mode - working for desktop
-    "binary_location": "/usr/bin/google-chrome-stable",
 }
+
+# Add Chrome binary location only on Linux (Mac auto-detects)
+import platform
+if platform.system() == "Linux":
+    chrome_kwargs["binary_location"] = "/usr/bin/google-chrome-stable"
 
 # Add essential Chrome flags for cloud environments
 chrome_kwargs["chromium_arg"] = [
@@ -96,17 +102,17 @@ try:
         # Randomly accept or reject (50/50 chance) to appear more human
         import random
         if random.choice([True, False]):
-            if sb.click_if_visible(reject_selector, timeout=1):
+            if sb.click_if_visible(reject_selector):
                 sb.sleep(1)
                 return True
-            elif sb.click_if_visible(accept_selector, timeout=1):
+            elif sb.click_if_visible(accept_selector):
                 sb.sleep(1)
                 return True
         else:
-            if sb.click_if_visible(accept_selector, timeout=1):
+            if sb.click_if_visible(accept_selector):
                 sb.sleep(1)
                 return True
-            elif sb.click_if_visible(reject_selector, timeout=1):
+            elif sb.click_if_visible(reject_selector):
                 sb.sleep(1)
                 return True
         return False
@@ -134,7 +140,7 @@ try:
 
         for selector in selectors:
             try:
-                if sb.click_if_visible(selector, timeout=0.5):
+                if sb.click_if_visible(selector):
                     sb.sleep(0.5)
             except:
                 continue
@@ -142,6 +148,18 @@ try:
     # Handle cookie consent and popups
     handle_google_cookie_consent()
     dismiss_popups_and_dialogs()
+
+    # ============================================
+    # SEARCH SUBMIT (if using query)
+    # ============================================
+    if use_search_submit:
+        # Type search query into search box
+        sb.type('textarea[name="q"]', query_string)
+        sb.sleep(1)
+
+        # Submit search using submit() method (more human-like)
+        sb.submit('textarea[name="q"]')
+        sb.sleep(3)
 
     # Scroll page (appears more human)
     sb.scroll_to_bottom()
@@ -152,8 +170,12 @@ try:
     # Get final URL (after redirects)
     final_url = sb.get_current_url()
 
-    # Get page HTML
-    page_html = sb.get_page_source()
+    # Get page HTML (with fallback for older versions)
+    try:
+        page_html = sb.get_page_source()
+    except Exception:
+        # Older version - use direct CDP call
+        page_html = sb.loop.run_until_complete(sb.page.get_content())
 
     # Take screenshot if requested
     screenshot_base64 = None
