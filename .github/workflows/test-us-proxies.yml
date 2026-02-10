@@ -16,12 +16,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Chrome 131
+      - name: Install Chrome
         run: |
-          wget -q https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_131.0.6778.139-1_amd64.deb
-          sudo apt-get install -y ./google-chrome-stable_131.0.6778.139-1_amd64.deb
-          sudo apt-mark hold google-chrome-stable
-          rm ./google-chrome-stable_131.0.6778.139-1_amd64.deb
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          rm ./google-chrome-stable_current_amd64.deb
           google-chrome --version
 
       - name: Install Dependencies
@@ -34,67 +33,146 @@ jobs:
       - name: Start Xvfb
         run: |
           Xvfb :99 -screen 0 1920x1080x24 &
-          echo "DISPLAY=:99" >> $GITHUB_ENV
           sleep 2
 
-      - name: Create Output Directories
-        run: |
-          mkdir -p results/screenshots
-          mkdir -p results/html
-          mkdir -p results/json
+      - name: Create Output Directory
+        run: mkdir -p results
 
-      - name: Run All Tests
-        run: |
-          echo "========================================"
-          echo "Testing US Proxies (No Docker Environment)"
-          echo "Chrome 131 | GitHub Actions (Ubuntu)"
-          echo "========================================"
-          echo ""
-
-          # Test function
-          run_test() {
-            local city="$1"
-            local proxy="$2"
-            local mode="$3"
-            local query="$4"
-            local test_name="${city}_${mode}_${query// /_}"
-
-            echo "🔄 Testing: $city | $mode | $query"
-
-            if [ "$mode" = "mobile" ]; then
-              python examples/cdp_mode/raw_cdp_google.py "$query" --proxy "$proxy" --mobile > "results/json/${test_name}.json" 2>&1 || true
-            else
-              python examples/cdp_mode/raw_cdp_google.py "$query" --proxy "$proxy" > "results/json/${test_name}.json" 2>&1 || true
-            fi
-
-            # Process results and extract screenshots
-            python .github/scripts/process_results.py "results/json/${test_name}.json" "results/${test_name}" || true
-            echo ""
-          }
-
-          # Los Angeles Tests
-          echo "📍 LOS ANGELES TESTS"
-          run_test "LA" "${{ secrets.PROXY_LA }}" "desktop" "miami hotels"
-          run_test "LA" "${{ secrets.PROXY_LA }}" "desktop" "tokyo hotels"
-          run_test "LA" "${{ secrets.PROXY_LA }}" "mobile" "miami hotels"
-          run_test "LA" "${{ secrets.PROXY_LA }}" "mobile" "tokyo hotels"
-
-          # Houston Tests
-          echo "📍 HOUSTON TESTS"
-          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "desktop" "miami hotels"
-          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "desktop" "tokyo hotels"
-          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "mobile" "miami hotels"
-          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "mobile" "tokyo hotels"
-
-          echo "========================================"
-          echo "✅ All tests complete!"
-          echo "Check artifacts for screenshots and HTML"
-          echo "========================================"
-        continue-on-error: false
+      - name: Test LA Desktop - Miami
+        continue-on-error: true
         env:
           DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "miami hotels" \
+            --proxy "${{ secrets.PROXY_LA }}" \
+            > results/la_desktop_miami.json 2>&1 || echo "Test failed"
+          echo "LA Desktop Miami completed"
 
-      - name: Upload Results (Screenshots & HTML)
+      - name: Test LA Desktop - Tokyo
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "tokyo hotels" \
+            --proxy "${{ secrets.PROXY_LA }}" \
+            > results/la_desktop_tokyo.json 2>&1 || echo "Test failed"
+          echo "LA Desktop Tokyo completed"
+
+      - name: Test LA Mobile - Miami
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "miami hotels" \
+            --proxy "${{ secrets.PROXY_LA }}" \
+            --mobile \
+            > results/la_mobile_miami.json 2>&1 || echo "Test failed"
+          echo "LA Mobile Miami completed"
+
+      - name: Test LA Mobile - Tokyo
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "tokyo hotels" \
+            --proxy "${{ secrets.PROXY_LA }}" \
+            --mobile \
+            > results/la_mobile_tokyo.json 2>&1 || echo "Test failed"
+          echo "LA Mobile Tokyo completed"
+
+      - name: Test Houston Desktop - Miami
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "miami hotels" \
+            --proxy "${{ secrets.PROXY_HOUSTON }}" \
+            > results/houston_desktop_miami.json 2>&1 || echo "Test failed"
+          echo "Houston Desktop Miami completed"
+
+      - name: Test Houston Desktop - Tokyo
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "tokyo hotels" \
+            --proxy "${{ secrets.PROXY_HOUSTON }}" \
+            > results/houston_desktop_tokyo.json 2>&1 || echo "Test failed"
+          echo "Houston Desktop Tokyo completed"
+
+      - name: Test Houston Mobile - Miami
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "miami hotels" \
+            --proxy "${{ secrets.PROXY_HOUSTON }}" \
+            --mobile \
+            > results/houston_mobile_miami.json 2>&1 || echo "Test failed"
+          echo "Houston Mobile Miami completed"
+
+      - name: Test Houston Mobile - Tokyo
+        continue-on-error: true
+        env:
+          DISPLAY: :99
+        run: |
+          python examples/cdp_mode/raw_cdp_google.py "tokyo hotels" \
+            --proxy "${{ secrets.PROXY_HOUSTON }}" \
+            --mobile \
+            > results/houston_mobile_tokyo.json 2>&1 || echo "Test failed"
+          echo "Houston Mobile Tokyo completed"
+
+      - name: Process Results
+        continue-on-error: true
+        run: |
+          python3 << 'EOF'
+          import json
+          import base64
+          import os
+          import glob
+
+          results_dir = "results"
+          summary = []
+
+          for json_file in glob.glob(f"{results_dir}/*.json"):
+              test_name = os.path.basename(json_file).replace('.json', '')
+
+              try:
+                  with open(json_file, 'r') as f:
+                      data = json.load(f)
+
+                  if data.get('success'):
+                      html = data.get('html', '')
+                      screenshot_b64 = data.get('screenshot_base64', '')
+
+                      html_len = len(html)
+                      screenshot_len = len(screenshot_b64)
+
+                      # Save HTML
+                      with open(f"{results_dir}/{test_name}.html", 'w') as f:
+                          f.write(html)
+
+                      # Save screenshot
+                      if screenshot_b64:
+                          with open(f"{results_dir}/{test_name}.png", 'wb') as f:
+                              f.write(base64.b64decode(screenshot_b64))
+
+                      status = "✅ REAL" if screenshot_len > 500000 else "❌ CAPTCHA"
+                      summary.append(f"{status} {test_name}: HTML={html_len:,}, Screenshot={screenshot_len:,}")
+                  else:
+                      summary.append(f"❌ FAILED {test_name}: {data.get('error', 'Unknown error')}")
+
+              except Exception as e:
+                  summary.append(f"❌ ERROR {test_name}: {str(e)}")
+
+          # Write summary
+          with open(f"{results_dir}/SUMMARY.txt", 'w') as f:
+              f.write("\n".join(summary))
+
+          print("\n".join(summary))
+          EOF
+
+      - name: Upload Results
         uses: actions/upload-artifact@v4
         if: always()
         with:
