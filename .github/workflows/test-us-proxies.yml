@@ -1,0 +1,103 @@
+name: Test US Proxies (No Docker)
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  test-us-proxies:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Chrome 131
+        run: |
+          wget -q https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_131.0.6778.139-1_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_131.0.6778.139-1_amd64.deb
+          sudo apt-mark hold google-chrome-stable
+          rm ./google-chrome-stable_131.0.6778.139-1_amd64.deb
+          google-chrome --version
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          pip install seleniumbase
+          seleniumbase get chromedriver
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          sleep 2
+
+      - name: Create Output Directories
+        run: |
+          mkdir -p results/screenshots
+          mkdir -p results/html
+          mkdir -p results/json
+
+      - name: Run All Tests
+        run: |
+          echo "========================================"
+          echo "Testing US Proxies (No Docker Environment)"
+          echo "Chrome 131 | GitHub Actions (Ubuntu)"
+          echo "========================================"
+          echo ""
+
+          # Test function
+          run_test() {
+            local city="$1"
+            local proxy="$2"
+            local mode="$3"
+            local query="$4"
+            local test_name="${city}_${mode}_${query// /_}"
+
+            echo "🔄 Testing: $city | $mode | $query"
+
+            if [ "$mode" = "mobile" ]; then
+              python examples/cdp_mode/raw_cdp_google.py "$query" --proxy "$proxy" --mobile > "results/json/${test_name}.json" 2>&1 || true
+            else
+              python examples/cdp_mode/raw_cdp_google.py "$query" --proxy "$proxy" > "results/json/${test_name}.json" 2>&1 || true
+            fi
+
+            # Process results and extract screenshots
+            python .github/scripts/process_results.py "results/json/${test_name}.json" "results/${test_name}" || true
+            echo ""
+          }
+
+          # Los Angeles Tests
+          echo "📍 LOS ANGELES TESTS"
+          run_test "LA" "${{ secrets.PROXY_LA }}" "desktop" "miami hotels"
+          run_test "LA" "${{ secrets.PROXY_LA }}" "desktop" "tokyo hotels"
+          run_test "LA" "${{ secrets.PROXY_LA }}" "mobile" "miami hotels"
+          run_test "LA" "${{ secrets.PROXY_LA }}" "mobile" "tokyo hotels"
+
+          # Houston Tests
+          echo "📍 HOUSTON TESTS"
+          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "desktop" "miami hotels"
+          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "desktop" "tokyo hotels"
+          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "mobile" "miami hotels"
+          run_test "Houston" "${{ secrets.PROXY_HOUSTON }}" "mobile" "tokyo hotels"
+
+          echo "========================================"
+          echo "✅ All tests complete!"
+          echo "Check artifacts for screenshots and HTML"
+          echo "========================================"
+        continue-on-error: false
+        env:
+          DISPLAY: :99
+
+      - name: Upload Results (Screenshots & HTML)
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: us-proxy-test-results
+          path: results/
+          retention-days: 30
