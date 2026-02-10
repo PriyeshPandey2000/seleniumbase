@@ -80,13 +80,12 @@ RUN apt-get -qy --no-install-recommends install \
     xvfb
 
 #================
-# Install Chrome 131 (downgraded for better stealth)
+# Install Chrome
 #================
 RUN apt-get update
-RUN wget -q https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_131.0.6778.139-1_amd64.deb
-RUN apt-get install -y ./google-chrome-stable_131.0.6778.139-1_amd64.deb || true
-RUN apt-mark hold google-chrome-stable
-RUN rm ./google-chrome-stable_131.0.6778.139-1_amd64.deb
+RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+RUN apt-get install -y ./google-chrome-stable_current_amd64.deb
+RUN rm ./google-chrome-stable_current_amd64.deb
 
 #================
 # Install Python
