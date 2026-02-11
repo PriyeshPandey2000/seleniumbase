@@ -57,8 +57,15 @@ chrome_kwargs["chromium_arg"] = [
 if args.proxy:
     chrome_kwargs["proxy"] = args.proxy
 
-# Add user agent if provided
-if args.user_agent:
+# Add user agent if provided (or set mobile user agent if mobile mode)
+if args.mobile and not args.user_agent:
+    # Set mobile user agent for consistency with mobile device metrics
+    chrome_kwargs["user_agent"] = (
+        "Mozilla/5.0 (Linux; Android 10; Pixel 3 XL) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Mobile Safari/537.36"
+    )
+elif args.user_agent:
     chrome_kwargs["user_agent"] = args.user_agent
 
 # Add mobile mode if requested (stealthy mobile emulation)
