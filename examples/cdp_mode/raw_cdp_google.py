@@ -66,12 +66,17 @@ if args.mobile:
         "ad_block": False if args.proxy else True,
         "headless": False,
         "headless2": False,
+        "binary_location": "/usr/bin/google-chrome-stable",
     }
 
-    # Platform-specific: Set Chrome binary on Linux
+    # Add essential Chrome flags for cloud environments
+    chrome_kwargs_mobile["chromium_arg"] = [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+    ]
+
     if is_linux:
-        chrome_kwargs_mobile["binary_location"] = "/usr/bin/google-chrome-stable"
-        log_debug("Linux detected: Setting Chrome binary")
+        log_debug("Linux detected: Using Chrome stable binary")
 
     # Add proxy if provided
     if args.proxy:
