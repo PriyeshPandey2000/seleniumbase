@@ -59,11 +59,12 @@ if args.proxy:
 
 # Add user agent if provided (or set mobile user agent if mobile mode)
 if args.mobile and not args.user_agent:
-    # Set mobile user agent for consistency with mobile device metrics
+    # Use generic mobile UA (matches SeleniumBase official examples)
+    # Uses "K" for device (Chrome's new standard) and NO Chrome version
     chrome_kwargs["user_agent"] = (
-        "Mozilla/5.0 (Linux; Android 10; Pixel 3 XL) "
+        "Mozilla/5.0 (Linux; Android 10; K) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Mobile Safari/537.36"
+        "Mobile Safari/537.36"
     )
 elif args.user_agent:
     chrome_kwargs["user_agent"] = args.user_agent
