@@ -60,23 +60,22 @@ if args.mobile:
     # Detect platform
     is_linux = platform.system() == "Linux"
 
-    # Configure UC Mode for mobile (WITHOUT mobile=True - we'll set manually)
-    sb_kwargs = {
-        "uc": True,           # Undetected Chrome mode (most stealthy)
+    # Configure raw CDP for mobile (matches official raw_cdp_mobile.py example)
+    chrome_kwargs_mobile = {
         "incognito": True,
         "ad_block": False if args.proxy else True,
         "headless": False,
-        "test": False,
+        "headless2": False,
     }
 
     # Platform-specific: Set Chrome binary on Linux
     if is_linux:
-        sb_kwargs["chromium_arg"] = "--binary-location=/usr/bin/google-chrome-stable"
+        chrome_kwargs_mobile["binary_location"] = "/usr/bin/google-chrome-stable"
         log_debug("Linux detected: Setting Chrome binary")
 
     # Add proxy if provided
     if args.proxy:
-        sb_kwargs["proxy"] = args.proxy
+        chrome_kwargs_mobile["proxy"] = args.proxy
         log_debug(f"Proxy: {args.proxy[:50]}...")
 
     # Mobile User-Agent (generic Android - matches official examples)
@@ -88,226 +87,232 @@ if args.mobile:
     log_debug(f"Mobile UA: {mobile_agent[:60]}...")
 
     try:
-        log_debug("Launching Chrome with UC Mode...")
+        log_debug("Launching Chrome with raw CDP (mobile mode)...")
 
-        with SB(**sb_kwargs) as sb:
-            # Activate CDP mode with mobile User-Agent
-            log_debug("Activating CDP mode with mobile agent...")
-            sb.activate_cdp_mode(agent=mobile_agent)
+        # Use raw CDP approach (like official raw_cdp_mobile.py)
+        # This ensures device metrics are set BEFORE viewport is established
+        sb = sb_cdp.Chrome(**chrome_kwargs_mobile)
 
-            # Get CDP tab and event loop for emulation overrides
-            import mycdp
-            tab = sb.cdp.get_active_tab()
-            loop = sb.cdp.get_event_loop()
+        # Get CDP tab and event loop for emulation overrides
+        import mycdp
+        tab = sb.get_active_tab()
+        loop = sb.get_event_loop()
+        log_debug("CDP connection established")
 
-            # Set User-Agent with platform override (fixes navigator.platform)
-            log_debug("Setting UA with platform override...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_user_agent_override(
-                        user_agent=mobile_agent,
-                        platform="Linux aarch64"  # Mobile Android platform
-                    )
+        # Set User-Agent with platform override FIRST
+        log_debug("Setting mobile User-Agent with platform...")
+        loop.run_until_complete(
+            tab.send(
+                mycdp.emulation.set_user_agent_override(
+                    user_agent=mobile_agent,
+                    platform="Linux aarch64"  # Mobile Android platform
                 )
             )
+        )
 
-            # Set device metrics BEFORE opening URL (critical!)
-            log_debug("Setting device metrics override...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_device_metrics_override(
-                        width=412,
-                        height=732,
-                        device_scale_factor=3,
-                        mobile=True
-                    )
+        # Set device metrics BEFORE opening any URL (CRITICAL!)
+        log_debug("Setting device metrics (412x732, mobile=True)...")
+        loop.run_until_complete(
+            tab.send(
+                mycdp.emulation.set_device_metrics_override(
+                    width=412,
+                    height=732,
+                    device_scale_factor=3,
+                    mobile=True
                 )
             )
-            log_debug("Device metrics applied (412x732, mobile=True)")
+        )
+        log_debug("Device metrics applied BEFORE URL open")
 
-            # Enable touch emulation (fixes touch events)
-            log_debug("Enabling touch emulation...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_touch_emulation_enabled(
-                        enabled=True,
-                        max_touch_points=5  # Standard for mobile devices
-                    )
+        # Enable touch emulation
+        log_debug("Enabling touch emulation...")
+        loop.run_until_complete(
+            tab.send(
+                mycdp.emulation.set_touch_emulation_enabled(
+                    enabled=True,
+                    max_touch_points=5
                 )
             )
-            log_debug("Touch emulation enabled (max_touch_points=5)")
+        )
+        log_debug("Touch emulation enabled")
 
-            # Set timezone to match proxy location (if available)
-            if args.proxy and "_city-" in args.proxy:
-                try:
-                    TIMEZONE_MAP = {
-                        "newyork": "America/New_York",
-                        "losangeles": "America/Los_Angeles",
-                        "chicago": "America/Chicago",
-                        "houston": "America/Chicago",
-                        "lasvegas": "America/Los_Angeles",
-                    }
-                    city = args.proxy.split("_city-")[1].split("@")[0].lower()
-                    proxy_timezone = TIMEZONE_MAP.get(city)
-                    if proxy_timezone:
-                        log_debug(f"Setting timezone to {proxy_timezone} (proxy city: {city})")
-                        loop.run_until_complete(
-                            tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
-                        )
-                except Exception as e:
-                    log_debug(f"Could not set timezone: {e}")
-
-            # NOW open target URL (after device metrics and timezone are set)
-            log_debug("Opening URL...")
-            sb.open(target_url)
-
-            # Log actual user agent being used
+        # Set timezone to match proxy location (if available)
+        if args.proxy and "_city-" in args.proxy:
             try:
-                actual_ua = sb.execute_script("return navigator.userAgent;")
-                log_debug(f"Actual UA: {actual_ua[:80]}...")
-
-                is_mobile_ua = any(x in actual_ua.lower() for x in ['mobile', 'android', 'iphone'])
-                log_debug(f"Mobile UA detected: {is_mobile_ua}")
-            except Exception as e:
-                log_debug(f"Could not retrieve UA: {e}")
-
-            # Log viewport dimensions
-            try:
-                vw = sb.execute_script("return window.innerWidth;")
-                vh = sb.execute_script("return window.innerHeight;")
-                log_debug(f"Viewport: {vw}x{vh}")
-
-                if vw > 500:
-                    log_debug("⚠️  WARNING: Viewport > 500px (should be mobile size ~412px)")
-            except Exception as e:
-                log_debug(f"Could not get viewport: {e}")
-
-            # Log device capabilities
-            try:
-                has_touch = sb.execute_script("return 'ontouchstart' in window;")
-                platform_val = sb.execute_script("return navigator.platform;")
-                log_debug(f"Touch events: {has_touch}")
-                log_debug(f"Navigator.platform: {platform_val}")
-            except Exception as e:
-                log_debug(f"Could not get device props: {e}")
-
-            # Wait for page load
-            sb.sleep(3)
-            log_debug("Page loaded, waiting 3s...")
-
-            # Handle cookie consent (inline function)
-            def handle_cookie_consent():
-                import random
-                selectors = ['#L2AGLb', '#WOwltc']  # Reject, Accept
-                random.shuffle(selectors)
-                for sel in selectors:
-                    if sb.click_if_visible(sel, timeout=1):
-                        sb.sleep(1)
-                        return True
-                return False
-
-            log_debug("Handling cookie consent...")
-            handle_cookie_consent()
-
-            # Dismiss popups
-            popup_selectors = [
-                'g-raised-button[jsaction="click:O6N1Pb"]',
-                'button[aria-label*="Block"]',
-                'button[data-value="Block"]',
-            ]
-            for sel in popup_selectors:
-                try:
-                    sb.click_if_visible(sel, timeout=0.5)
-                except:
-                    pass
-
-            # Scroll (human-like behavior)
-            log_debug("Scrolling page...")
-            sb.scroll_to_bottom()
-            sb.sleep(1)
-            sb.scroll_to_top()
-            sb.sleep(1)
-
-            # Get final URL
-            final_url = sb.get_current_url()
-            log_debug(f"Final URL: {final_url}")
-
-            # Check if mobile version
-            if "/m." in final_url or "m.google" in final_url:
-                log_debug("✅ Google mobile version detected")
-            else:
-                log_debug("⚠️  Desktop URL (Google may not detect mobile)")
-
-            # Get HTML
-            page_html = sb.get_page_source()
-            log_debug(f"HTML length: {len(page_html):,} chars")
-
-            # Screenshot (full page)
-            screenshot_base64 = None
-            if not args.no_screenshot:
-                log_debug("Capturing full-page screenshot...")
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    tmp_path = tmp.name
-
-                # Use CDP to capture full page screenshot (works with mobile width)
-                loop.run_until_complete(
-                    tab.send(mycdp.page.navigate(url=sb.get_current_url()))
-                )
-                sb.sleep(1)
-
-                # Capture full page screenshot via CDP
-                import asyncio
-                screenshot_data = loop.run_until_complete(
-                    tab.send(mycdp.page.capture_screenshot(format_='png', capture_beyond_viewport=True))
-                )
-
-                # Decode base64 screenshot from CDP
-                import base64 as b64
-                screenshot_bytes = b64.b64decode(screenshot_data)
-
-                with open(tmp_path, 'wb') as f:
-                    f.write(screenshot_bytes)
-
-                screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-
-                log_debug(f"Full-page screenshot size: {len(screenshot_base64):,} chars")
-
-                if len(screenshot_base64) < 100000:
-                    log_debug("⚠️  Small screenshot (<100k) - possible CAPTCHA")
-                elif len(screenshot_base64) > 500000:
-                    log_debug("✅ Large screenshot (>500k) - likely real content")
-
-                os.remove(tmp_path)
-
-            # Build response
-            response = {
-                "success": True,
-                "url": final_url,
-                "html": page_html,
-                "debug_info": {
-                    "mode": "mobile",
-                    "implementation": "UC Mode (SB)",
-                    "logs": debug_log,
-                    "html_length": len(page_html),
+                TIMEZONE_MAP = {
+                    "newyork": "America/New_York",
+                    "losangeles": "America/Los_Angeles",
+                    "chicago": "America/Chicago",
+                    "houston": "America/Chicago",
+                    "lasvegas": "America/Los_Angeles",
                 }
+                city = args.proxy.split("_city-")[1].split("@")[0].lower()
+                proxy_timezone = TIMEZONE_MAP.get(city)
+                if proxy_timezone:
+                    log_debug(f"Setting timezone: {proxy_timezone} (city: {city})")
+                    loop.run_until_complete(
+                        tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
+                    )
+            except Exception as e:
+                log_debug(f"Could not set timezone: {e}")
+
+        # NOW open target URL (viewport is already 412x732)
+        log_debug(f"Opening URL: {target_url}")
+        sb.open(target_url)
+
+        # Wait for page load
+        sb.sleep(3)
+        log_debug("Page loaded, waiting 3s...")
+
+        # Log actual user agent being used
+        try:
+            actual_ua = sb.execute_script("return navigator.userAgent;")
+            log_debug(f"Actual UA: {actual_ua[:80]}...")
+
+            is_mobile_ua = any(x in actual_ua.lower() for x in ['mobile', 'android', 'iphone'])
+            log_debug(f"Mobile UA detected: {is_mobile_ua}")
+        except Exception as e:
+            log_debug(f"Could not retrieve UA: {e}")
+
+        # Log viewport dimensions (CRITICAL CHECK)
+        try:
+            vw = sb.execute_script("return window.innerWidth;")
+            vh = sb.execute_script("return window.innerHeight;")
+            log_debug(f"Viewport: {vw}x{vh}")
+
+            if vw == 412:
+                log_debug("✅ CORRECT mobile viewport width (412px)")
+            elif vw > 500:
+                log_debug(f"⚠️  WARNING: Viewport {vw}px (should be 412px for mobile)")
+        except Exception as e:
+            log_debug(f"Could not get viewport: {e}")
+
+        # Log device capabilities
+        try:
+            has_touch = sb.execute_script("return 'ontouchstart' in window;")
+            platform_val = sb.execute_script("return navigator.platform;")
+            log_debug(f"Touch events: {has_touch}")
+            log_debug(f"Navigator.platform: {platform_val}")
+        except Exception as e:
+            log_debug(f"Could not get device props: {e}")
+
+        # Handle cookie consent
+        def handle_cookie_consent():
+            import random
+            selectors = ['#L2AGLb', '#WOwltc']  # Reject, Accept
+            random.shuffle(selectors)
+            for sel in selectors:
+                if sb.click_if_visible(sel, timeout=1):
+                    sb.sleep(1)
+                    return True
+            return False
+
+        log_debug("Handling cookie consent...")
+        handle_cookie_consent()
+
+        # Dismiss popups
+        popup_selectors = [
+            'g-raised-button[jsaction="click:O6N1Pb"]',
+            'button[aria-label*="Block"]',
+            'button[data-value="Block"]',
+        ]
+        for sel in popup_selectors:
+            try:
+                sb.click_if_visible(sel, timeout=0.5)
+            except:
+                pass
+
+        # Scroll (human-like behavior)
+        log_debug("Scrolling page...")
+        sb.scroll_to_bottom()
+        sb.sleep(1)
+        sb.scroll_to_top()
+        sb.sleep(1)
+
+        # Get final URL
+        final_url = sb.get_current_url()
+        log_debug(f"Final URL: {final_url}")
+
+        # Check if mobile version
+        if "/m." in final_url or "m.google" in final_url:
+            log_debug("✅ Google mobile version detected in URL")
+        else:
+            log_debug("ℹ️  Standard Google URL (may still be mobile HTML)")
+
+        # Get HTML
+        page_html = sb.get_page_source()
+        log_debug(f"HTML length: {len(page_html):,} chars")
+
+        # Check if we got mobile HTML
+        if '<meta name="viewport"' in page_html and 'device-width' in page_html:
+            log_debug("✅ Mobile HTML detected (has viewport meta tag)")
+        elif 'id="center_col"' in page_html:
+            log_debug("⚠️  Desktop HTML detected (has center_col)")
+        else:
+            log_debug("ℹ️  HTML structure unclear")
+
+        # Screenshot (full page via CDP)
+        screenshot_base64 = None
+        if not args.no_screenshot:
+            log_debug("Capturing full-page screenshot...")
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                tmp_path = tmp.name
+
+            # Capture full page screenshot via CDP
+            screenshot_data = loop.run_until_complete(
+                tab.send(mycdp.page.capture_screenshot(format_='png', capture_beyond_viewport=True))
+            )
+
+            # Decode and save
+            import base64 as b64
+            screenshot_bytes = b64.b64decode(screenshot_data)
+
+            with open(tmp_path, 'wb') as f:
+                f.write(screenshot_bytes)
+
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+
+            log_debug(f"Screenshot size: {len(screenshot_base64):,} chars")
+
+            if len(screenshot_base64) < 100000:
+                log_debug("⚠️  Small screenshot (<100k) - possible CAPTCHA")
+            elif len(screenshot_base64) > 500000:
+                log_debug("✅ Large screenshot (>500k) - likely real content")
+
+            os.remove(tmp_path)
+
+        # Build response
+        response = {
+            "success": True,
+            "url": final_url,
+            "html": page_html,
+            "debug_info": {
+                "mode": "mobile",
+                "implementation": "Raw CDP (sb_cdp.Chrome)",
+                "logs": debug_log,
+                "html_length": len(page_html),
             }
+        }
 
-            if screenshot_base64:
-                response["screenshot_base64"] = screenshot_base64
-                response["debug_info"]["screenshot_length"] = len(screenshot_base64)
+        if screenshot_base64:
+            response["screenshot_base64"] = screenshot_base64
+            response["debug_info"]["screenshot_length"] = len(screenshot_base64)
 
-            if query_string:
-                response["query"] = query_string
+        if query_string:
+            response["query"] = query_string
 
-            if args.proxy:
-                response["proxy"] = args.proxy
+        if args.proxy:
+            response["proxy"] = args.proxy
 
-            log_debug("✅ Mobile scraping completed")
+        log_debug("✅ Mobile scraping completed")
 
-            # Output JSON
-            print(json.dumps(response))
-            sys.exit(0)
+        # Output JSON
+        print(json.dumps(response))
+
+        # Cleanup
+        sb.driver.stop()
+        sys.exit(0)
 
     except Exception as e:
         log_debug(f"❌ Mobile mode error: {str(e)}")
@@ -317,7 +322,7 @@ if args.mobile:
             "url": args.url if args.url else f"Google search: {args.query}",
             "debug_info": {
                 "mode": "mobile",
-                "implementation": "UC Mode (SB)",
+                "implementation": "Raw CDP (sb_cdp.Chrome)",
                 "logs": debug_log,
             }
         }
