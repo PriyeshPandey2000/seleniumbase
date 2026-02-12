@@ -95,11 +95,24 @@ if args.mobile:
             log_debug("Activating CDP mode with mobile agent...")
             sb.activate_cdp_mode(agent=mobile_agent)
 
-            # Manually set device metrics BEFORE opening URL (critical!)
-            log_debug("Setting device metrics override...")
+            # Get CDP tab and event loop for emulation overrides
             import mycdp
             tab = sb.cdp.get_active_tab()
             loop = sb.cdp.get_event_loop()
+
+            # Set User-Agent with platform override (fixes navigator.platform)
+            log_debug("Setting UA with platform override...")
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.emulation.set_user_agent_override(
+                        user_agent=mobile_agent,
+                        platform="Linux aarch64"  # Mobile Android platform
+                    )
+                )
+            )
+
+            # Set device metrics BEFORE opening URL (critical!)
+            log_debug("Setting device metrics override...")
             loop.run_until_complete(
                 tab.send(
                     mycdp.emulation.set_device_metrics_override(
@@ -111,6 +124,18 @@ if args.mobile:
                 )
             )
             log_debug("Device metrics applied (412x732, mobile=True)")
+
+            # Enable touch emulation (fixes touch events)
+            log_debug("Enabling touch emulation...")
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.emulation.set_touch_emulation_enabled(
+                        enabled=True,
+                        max_touch_points=5  # Standard for mobile devices
+                    )
+                )
+            )
+            log_debug("Touch emulation enabled (max_touch_points=5)")
 
             # Set timezone to match proxy location (if available)
             if args.proxy and "_city-" in args.proxy:
