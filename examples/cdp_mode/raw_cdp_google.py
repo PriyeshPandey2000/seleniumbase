@@ -87,11 +87,8 @@ try:
     except:
         pass  # Continue even if warmup fails
 
-    # Launch Chrome with CDP (don't pass URL yet - let device metrics apply first)
-    sb = sb_cdp.Chrome(**chrome_kwargs)
-
-    # Now open the URL (device metrics already applied for mobile mode)
-    sb.open(target_url)
+    # Launch Chrome with CDP
+    sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
 
     # Wait for page to load
     sb.sleep(3)
