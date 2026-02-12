@@ -60,10 +60,9 @@ if args.mobile:
     # Detect platform
     is_linux = platform.system() == "Linux"
 
-    # Configure UC Mode for mobile
+    # Configure UC Mode for mobile (WITHOUT mobile=True - we'll set manually)
     sb_kwargs = {
         "uc": True,           # Undetected Chrome mode (most stealthy)
-        "mobile": True,       # Enable proper mobile emulation with device metrics
         "incognito": True,
         "ad_block": False if args.proxy else True,
         "headless": False,
@@ -80,18 +79,60 @@ if args.mobile:
         sb_kwargs["proxy"] = args.proxy
         log_debug(f"Proxy: {args.proxy[:50]}...")
 
-    # Custom user agent (optional - mobile=True auto-generates one)
-    if args.user_agent:
-        sb_kwargs["agent"] = args.user_agent
-        log_debug(f"Custom UA: {args.user_agent[:60]}...")
-    else:
-        log_debug("Using auto-generated mobile User-Agent")
+    # Mobile User-Agent (generic Android - matches official examples)
+    mobile_agent = args.user_agent if args.user_agent else (
+        "Mozilla/5.0 (Linux; Android 10; K) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Mobile Safari/537.36"
+    )
+    log_debug(f"Mobile UA: {mobile_agent[:60]}...")
 
     try:
         log_debug("Launching Chrome with UC Mode...")
 
         with SB(**sb_kwargs) as sb:
-            # Open target URL
+            # Activate CDP mode with mobile User-Agent
+            log_debug("Activating CDP mode with mobile agent...")
+            sb.activate_cdp_mode(agent=mobile_agent)
+
+            # Manually set device metrics BEFORE opening URL (critical!)
+            log_debug("Setting device metrics override...")
+            import mycdp
+            tab = sb.cdp.get_active_tab()
+            loop = sb.cdp.get_event_loop()
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.emulation.set_device_metrics_override(
+                        width=412,
+                        height=732,
+                        device_scale_factor=3,
+                        mobile=True
+                    )
+                )
+            )
+            log_debug("Device metrics applied (412x732, mobile=True)")
+
+            # Set timezone to match proxy location (if available)
+            if args.proxy and "_city-" in args.proxy:
+                try:
+                    TIMEZONE_MAP = {
+                        "newyork": "America/New_York",
+                        "losangeles": "America/Los_Angeles",
+                        "chicago": "America/Chicago",
+                        "houston": "America/Chicago",
+                        "lasvegas": "America/Los_Angeles",
+                    }
+                    city = args.proxy.split("_city-")[1].split("@")[0].lower()
+                    proxy_timezone = TIMEZONE_MAP.get(city)
+                    if proxy_timezone:
+                        log_debug(f"Setting timezone to {proxy_timezone} (proxy city: {city})")
+                        loop.run_until_complete(
+                            tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
+                        )
+                except Exception as e:
+                    log_debug(f"Could not set timezone: {e}")
+
+            # NOW open target URL (after device metrics and timezone are set)
             log_debug("Opening URL...")
             sb.open(target_url)
 
