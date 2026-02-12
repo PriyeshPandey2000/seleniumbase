@@ -73,6 +73,24 @@ elif args.user_agent:
 if args.mobile:
     chrome_kwargs["mobile"] = True
 
+# Timezone mapping for US cities (improves fingerprint consistency)
+TIMEZONE_MAP = {
+    "newyork": "America/New_York",      # EST/EDT
+    "losangeles": "America/Los_Angeles", # PST/PDT
+    "chicago": "America/Chicago",        # CST/CDT
+    "houston": "America/Chicago",        # CST/CDT (Texas is Central)
+    "lasvegas": "America/Los_Angeles",   # PST/PDT (Nevada is Pacific)
+}
+
+# Extract city from proxy and set timezone if available
+proxy_timezone = None
+if args.proxy and "_city-" in args.proxy:
+    try:
+        city = args.proxy.split("_city-")[1].split("@")[0].lower()
+        proxy_timezone = TIMEZONE_MAP.get(city)
+    except:
+        pass  # If parsing fails, continue without timezone
+
 try:
     # Try to warm up Chrome (non-fatal if it fails)
     chrome_path = "/usr/bin/google-chrome-stable"
@@ -89,6 +107,18 @@ try:
 
     # Launch Chrome with CDP
     sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
+
+    # Set timezone to match proxy location (if available)
+    if proxy_timezone:
+        try:
+            import mycdp
+            tab = sb.get_active_tab()
+            loop = sb.get_event_loop()
+            loop.run_until_complete(
+                tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
+            )
+        except Exception as e:
+            pass  # Continue even if timezone setting fails
 
     # Wait for page to load
     sb.sleep(3)
