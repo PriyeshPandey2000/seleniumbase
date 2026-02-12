@@ -95,24 +95,11 @@ if args.mobile:
             log_debug("Activating CDP mode with mobile agent...")
             sb.activate_cdp_mode(agent=mobile_agent)
 
-            # Get CDP tab and event loop for emulation overrides
+            # Manually set device metrics BEFORE opening URL (critical!)
+            log_debug("Setting device metrics override...")
             import mycdp
             tab = sb.cdp.get_active_tab()
             loop = sb.cdp.get_event_loop()
-
-            # Set User-Agent with platform override (fixes navigator.platform)
-            log_debug("Setting UA with platform override...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_user_agent_override(
-                        user_agent=mobile_agent,
-                        platform="Linux aarch64"  # Mobile Android platform
-                    )
-                )
-            )
-
-            # Set device metrics BEFORE opening URL (critical!)
-            log_debug("Setting device metrics override...")
             loop.run_until_complete(
                 tab.send(
                     mycdp.emulation.set_device_metrics_override(
@@ -124,18 +111,6 @@ if args.mobile:
                 )
             )
             log_debug("Device metrics applied (412x732, mobile=True)")
-
-            # Enable touch emulation (fixes touch events)
-            log_debug("Enabling touch emulation...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_touch_emulation_enabled(
-                        enabled=True,
-                        max_touch_points=5  # Standard for mobile devices
-                    )
-                )
-            )
-            log_debug("Touch emulation enabled (max_touch_points=5)")
 
             # Set timezone to match proxy location (if available)
             if args.proxy and "_city-" in args.proxy:
@@ -242,36 +217,21 @@ if args.mobile:
             page_html = sb.get_page_source()
             log_debug(f"HTML length: {len(page_html):,} chars")
 
-            # Screenshot (full page)
+            # Screenshot
             screenshot_base64 = None
             if not args.no_screenshot:
-                log_debug("Capturing full-page screenshot...")
+                log_debug("Capturing screenshot...")
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
                     tmp_path = tmp.name
 
-                # Use CDP to capture full page screenshot (works with mobile width)
-                loop.run_until_complete(
-                    tab.send(mycdp.page.navigate(url=sb.get_current_url()))
-                )
-                sb.sleep(1)
+                sb.save_screenshot(tmp_path)
 
-                # Capture full page screenshot via CDP
-                import asyncio
-                screenshot_data = loop.run_until_complete(
-                    tab.send(mycdp.page.capture_screenshot(format_='png', capture_beyond_viewport=True))
-                )
+                with open(tmp_path, 'rb') as f:
+                    screenshot_bytes = f.read()
+                    screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
 
-                # Decode base64 screenshot from CDP
-                import base64 as b64
-                screenshot_bytes = b64.b64decode(screenshot_data)
-
-                with open(tmp_path, 'wb') as f:
-                    f.write(screenshot_bytes)
-
-                screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-
-                log_debug(f"Full-page screenshot size: {len(screenshot_base64):,} chars")
+                log_debug(f"Screenshot size: {len(screenshot_base64):,} chars")
 
                 if len(screenshot_base64) < 100000:
                     log_debug("⚠️  Small screenshot (<100k) - possible CAPTCHA")
