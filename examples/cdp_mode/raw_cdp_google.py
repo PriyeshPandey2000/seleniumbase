@@ -8,6 +8,8 @@ import base64
 import subprocess
 import platform
 import time
+import urllib.request
+import urllib.error
 
 # Initialize debug log for troubleshooting
 debug_log = []
@@ -17,54 +19,72 @@ def log_debug(message):
     debug_log.append(message)
     print(f"[DEBUG] {message}", file=sys.stderr)
 
-def detect_proxy_timezone(sb, max_retries=3):
+def detect_proxy_timezone(proxy_string, max_retries=3):
     """
     Detect timezone and geolocation from proxy using ip-api.com
+    Uses Python urllib (built-in, no dependencies)
     Returns: dict with timezone, coords, country, city, ip (or None if failed)
     """
     log_debug("Detecting proxy timezone and location...")
 
+    # Setup proxy handler
+    proxy_handler = None
+    if proxy_string:
+        if '@' in proxy_string:
+            # Authenticated proxy: user:pass@host:port
+            proxy_handler = urllib.request.ProxyHandler({
+                'http': f'http://{proxy_string}',
+                'https': f'http://{proxy_string}'
+            })
+        else:
+            # Unauthenticated proxy: host:port
+            proxy_handler = urllib.request.ProxyHandler({
+                'http': f'http://{proxy_string}',
+                'https': f'http://{proxy_string}'
+            })
+
     for attempt in range(1, max_retries + 1):
         try:
-            # Use synchronous XMLHttpRequest for better compatibility
-            result = sb.execute_script("""
-                var xhr = new XMLHttpRequest();
-                xhr.open('GET', 'http://ip-api.com/json/?fields=status,query,timezone,lat,lon,country,city', false);
-                xhr.timeout = 8000;
-                try {
-                    xhr.send(null);
-                    if (xhr.status === 200) {
-                        return JSON.parse(xhr.responseText);
-                    } else {
-                        return { error: 'HTTP ' + xhr.status };
-                    }
-                } catch (e) {
-                    return { error: e.message };
-                }
-            """)
-
-            if result and result.get('status') == 'success' and result.get('timezone'):
-                log_debug(f"✅ Proxy location detected (attempt {attempt}):")
-                log_debug(f"   IP: {result.get('query')}")
-                log_debug(f"   Country: {result.get('country')}")
-                log_debug(f"   City: {result.get('city')}")
-                log_debug(f"   Timezone: {result.get('timezone')}")
-                log_debug(f"   Coords: {result.get('lat')}, {result.get('lon')}")
-
-                return {
-                    'timezone': result.get('timezone'),
-                    'coords': {
-                        'latitude': result.get('lat'),
-                        'longitude': result.get('lon')
-                    } if result.get('lat') and result.get('lon') else None,
-                    'country': result.get('country'),
-                    'city': result.get('city'),
-                    'ip': result.get('query')
-                }
+            # Build opener with proxy
+            if proxy_handler:
+                opener = urllib.request.build_opener(proxy_handler)
             else:
-                error_msg = result.get('error') if result else 'Unknown error'
-                log_debug(f"⚠️  IP-API attempt {attempt} failed: {error_msg}")
+                opener = urllib.request.build_opener()
 
+            # Make request
+            req = urllib.request.Request(
+                'http://ip-api.com/json/?fields=status,query,timezone,lat,lon,country,city'
+            )
+
+            with opener.open(req, timeout=8) as response:
+                if response.status == 200:
+                    result = json.loads(response.read().decode('utf-8'))
+
+                    if result and result.get('status') == 'success' and result.get('timezone'):
+                        log_debug(f"✅ Proxy location detected (attempt {attempt}):")
+                        log_debug(f"   IP: {result.get('query')}")
+                        log_debug(f"   Country: {result.get('country')}")
+                        log_debug(f"   City: {result.get('city')}")
+                        log_debug(f"   Timezone: {result.get('timezone')}")
+                        log_debug(f"   Coords: {result.get('lat')}, {result.get('lon')}")
+
+                        return {
+                            'timezone': result.get('timezone'),
+                            'coords': {
+                                'latitude': result.get('lat'),
+                                'longitude': result.get('lon')
+                            } if result.get('lat') and result.get('lon') else None,
+                            'country': result.get('country'),
+                            'city': result.get('city'),
+                            'ip': result.get('query')
+                        }
+                    else:
+                        log_debug(f"⚠️  IP-API attempt {attempt} failed: Invalid response")
+                else:
+                    log_debug(f"⚠️  IP-API attempt {attempt} failed: HTTP {response.status}")
+
+        except urllib.error.URLError as e:
+            log_debug(f"⚠️  IP-API attempt {attempt} URLError: {str(e)}")
         except Exception as e:
             log_debug(f"⚠️  IP-API attempt {attempt} error: {str(e)}")
 
@@ -239,7 +259,7 @@ if args.mobile:
 
             # Detect proxy timezone dynamically using ip-api.com
             if args.proxy:
-                proxy_data = detect_proxy_timezone(sb, max_retries=3)
+                proxy_data = detect_proxy_timezone(args.proxy, max_retries=3)
                 if proxy_data and proxy_data.get('timezone'):
                     try:
                         log_debug(f"Applying dynamic timezone: {proxy_data['timezone']}")
@@ -541,7 +561,7 @@ try:
 
     # Detect and set timezone dynamically based on proxy location
     if args.proxy:
-        proxy_data = detect_proxy_timezone(sb, max_retries=3)
+        proxy_data = detect_proxy_timezone(args.proxy, max_retries=3)
         if proxy_data and proxy_data.get('timezone'):
             try:
                 log_debug(f"Applying dynamic timezone: {proxy_data['timezone']}")
