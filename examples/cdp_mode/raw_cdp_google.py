@@ -10,6 +10,7 @@ import platform
 import time
 import urllib.request
 import urllib.error
+import random
 
 # Initialize debug log for troubleshooting
 debug_log = []
@@ -18,6 +19,22 @@ def log_debug(message):
     """Log debug information for output"""
     debug_log.append(message)
     print(f"[DEBUG] {message}", file=sys.stderr)
+
+# Real mobile device profiles (2-3 most popular, accurate devices)
+MOBILE_DEVICES = [
+    {
+        "name": "iPhone 13",
+        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+        "viewport": {"width": 390, "height": 844, "device_scale_factor": 3},
+        "platform": "iPhone",
+    },
+    {
+        "name": "Samsung Galaxy S21",
+        "user_agent": "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "viewport": {"width": 360, "height": 800, "device_scale_factor": 3},
+        "platform": "Linux armv8l",
+    },
+]
 
 def detect_proxy_timezone(proxy_string, max_retries=3):
     """
@@ -158,13 +175,12 @@ if args.mobile:
         sb_kwargs["proxy"] = args.proxy
         log_debug(f"Proxy: {args.proxy[:50]}...")
 
-    # Mobile User-Agent (generic Android - matches official examples)
-    mobile_agent = args.user_agent if args.user_agent else (
-        "Mozilla/5.0 (Linux; Android 10; K) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Mobile Safari/537.36"
-    )
-    log_debug(f"Mobile UA: {mobile_agent[:60]}...")
+    # Select random real device profile
+    device = random.choice(MOBILE_DEVICES)
+    log_debug(f"Selected device: {device['name']}")
+
+    mobile_agent = args.user_agent if args.user_agent else device['user_agent']
+    log_debug(f"Mobile UA: {mobile_agent[:80]}...")
 
     try:
         log_debug("Launching Chrome with UC Mode...")
@@ -215,10 +231,46 @@ if args.mobile:
             )
             log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
 
-            # Note: activate_cdp_mode with agent already sets UA, no need to override again
-            # Manual overrides create inconsistent fingerprints
+            # Apply real device settings via CDP
+            log_debug(f"Applying {device['name']} settings...")
 
-            # Open target URL first (needed for timezone detection)
+            # Set User-Agent with real platform
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.emulation.set_user_agent_override(
+                        user_agent=mobile_agent,
+                        platform=device['platform']
+                    )
+                )
+            )
+            log_debug(f"UA set: {device['platform']}")
+
+            # Set real device viewport
+            vp = device['viewport']
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.emulation.set_device_metrics_override(
+                        width=vp['width'],
+                        height=vp['height'],
+                        device_scale_factor=vp['device_scale_factor'],
+                        mobile=True
+                    )
+                )
+            )
+            log_debug(f"Viewport: {vp['width']}x{vp['height']} @{vp['device_scale_factor']}x")
+
+            # Enable touch emulation
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.emulation.set_touch_emulation_enabled(
+                        enabled=True,
+                        max_touch_points=5
+                    )
+                )
+            )
+            log_debug("Touch emulation enabled")
+
+            # Open target URL (after device settings applied)
             log_debug("Opening URL...")
             sb.open(target_url)
             sb.sleep(2)  # Wait for page to load
