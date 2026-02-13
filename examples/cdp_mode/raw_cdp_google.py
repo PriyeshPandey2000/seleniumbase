@@ -186,53 +186,22 @@ if args.mobile:
         log_debug("Launching Chrome with UC Mode...")
 
         with SB(**sb_kwargs) as sb:
-            # Activate CDP mode with mobile User-Agent
-            log_debug("Activating CDP mode with mobile agent...")
-            sb.activate_cdp_mode(agent=mobile_agent)
+            # CRITICAL: Set device metrics BEFORE activating CDP mode
+            # to avoid viewport leak (desktop -> mobile detection)
+            import mycdp
+
+            log_debug("Opening blank page...")
+            sb.open("about:blank")
+
+            log_debug("Activating CDP mode...")
+            sb.activate_cdp_mode()  # Don't pass agent here - set via CDP later
 
             # Get CDP tab and event loop for emulation overrides
-            import mycdp
             tab = sb.cdp.get_active_tab()
             loop = sb.cdp.get_event_loop()
 
-            # Block heavy resources to save proxy bandwidth
-            log_debug("Blocking images, fonts, videos to save bandwidth...")
-            loop.run_until_complete(tab.send(mycdp.network.enable()))
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.network.set_blocked_urls(
-                        urls=[
-                            # Images (biggest bandwidth consumers)
-                            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
-                            "*.svg", "*.ico", "*.bmp",
-                            # Fonts
-                            "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-                            # Videos and media
-                            "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
-                            # Other heavy resources
-                            "*.pdf", "*.zip", "*.rar",
-                            # Google CDN domains (images, thumbnails)
-                            "*googleusercontent.com*",
-                            "*gstatic.com*",
-                            "*encrypted-tbn*",
-                            "*yt3.ggpht.com*",  # YouTube profile pics
-                            "*ytimg.com*",  # YouTube images
-                            # YouTube video thumbnails
-                            "*img.youtube.com*",
-                            "*i.ytimg.com*",
-                            # Ad networks
-                            "*.googlesyndication.com*",
-                            "*.googletagmanager.com*",
-                            "*.google-analytics.com*",
-                            "*.doubleclick.net*",
-                        ]
-                    )
-                )
-            )
-            log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
-
-            # Apply real device settings via CDP
-            log_debug(f"Applying {device['name']} settings...")
+            # Apply device settings FIRST (before any real page loads)
+            log_debug(f"Applying {device['name']} settings BEFORE page load...")
 
             # Set User-Agent with real platform
             loop.run_until_complete(
@@ -270,7 +239,44 @@ if args.mobile:
             )
             log_debug("Touch emulation enabled")
 
-            # Open target URL (after device settings applied)
+            # Block heavy resources to save proxy bandwidth
+            log_debug("Blocking images, fonts, videos to save bandwidth...")
+            loop.run_until_complete(tab.send(mycdp.network.enable()))
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.network.set_blocked_urls(
+                        urls=[
+                            # Images (biggest bandwidth consumers)
+                            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
+                            "*.svg", "*.ico", "*.bmp",
+                            # Fonts
+                            "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+                            # Videos and media
+                            "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
+                            # Other heavy resources
+                            "*.pdf", "*.zip", "*.rar",
+                            # Google CDN domains (images, thumbnails)
+                            "*googleusercontent.com*",
+                            "*gstatic.com*",
+                            "*encrypted-tbn*",
+                            "*yt3.ggpht.com*",  # YouTube profile pics
+                            "*ytimg.com*",  # YouTube images
+                            # YouTube video thumbnails
+                            "*img.youtube.com*",
+                            "*i.ytimg.com*",
+                            # Ad networks
+                            "*.googlesyndication.com*",
+                            "*.googletagmanager.com*",
+                            "*.google-analytics.com*",
+                            "*.doubleclick.net*",
+                        ]
+                    )
+                )
+            )
+            log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
+
+            # Device settings already applied before page load (see above)
+            # Now open target URL with mobile fingerprint already set
             log_debug("Opening URL...")
             sb.open(target_url)
             sb.sleep(2)  # Wait for page to load
