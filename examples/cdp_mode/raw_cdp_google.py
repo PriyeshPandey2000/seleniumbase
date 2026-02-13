@@ -7,6 +7,7 @@ import json
 import base64
 import subprocess
 import platform
+import time
 
 # Initialize debug log for troubleshooting
 debug_log = []
@@ -15,6 +16,64 @@ def log_debug(message):
     """Log debug information for output"""
     debug_log.append(message)
     print(f"[DEBUG] {message}", file=sys.stderr)
+
+def detect_proxy_timezone(sb, max_retries=3):
+    """
+    Detect timezone and geolocation from proxy using ip-api.com
+    Returns: dict with timezone, coords, country, city, ip (or None if failed)
+    """
+    log_debug("Detecting proxy timezone and location...")
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Use synchronous XMLHttpRequest for better compatibility
+            result = sb.execute_script("""
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', 'http://ip-api.com/json/?fields=status,query,timezone,lat,lon,country,city', false);
+                xhr.timeout = 8000;
+                try {
+                    xhr.send(null);
+                    if (xhr.status === 200) {
+                        return JSON.parse(xhr.responseText);
+                    } else {
+                        return { error: 'HTTP ' + xhr.status };
+                    }
+                } catch (e) {
+                    return { error: e.message };
+                }
+            """)
+
+            if result and result.get('status') == 'success' and result.get('timezone'):
+                log_debug(f"✅ Proxy location detected (attempt {attempt}):")
+                log_debug(f"   IP: {result.get('query')}")
+                log_debug(f"   Country: {result.get('country')}")
+                log_debug(f"   City: {result.get('city')}")
+                log_debug(f"   Timezone: {result.get('timezone')}")
+                log_debug(f"   Coords: {result.get('lat')}, {result.get('lon')}")
+
+                return {
+                    'timezone': result.get('timezone'),
+                    'coords': {
+                        'latitude': result.get('lat'),
+                        'longitude': result.get('lon')
+                    } if result.get('lat') and result.get('lon') else None,
+                    'country': result.get('country'),
+                    'city': result.get('city'),
+                    'ip': result.get('query')
+                }
+            else:
+                error_msg = result.get('error') if result else 'Unknown error'
+                log_debug(f"⚠️  IP-API attempt {attempt} failed: {error_msg}")
+
+        except Exception as e:
+            log_debug(f"⚠️  IP-API attempt {attempt} error: {str(e)}")
+
+        # Wait before retry (except on last attempt)
+        if attempt < max_retries:
+            time.sleep(1)
+
+    log_debug("❌ Failed to detect proxy timezone after all retries")
+    return None
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='CDP Mode Web Scraper')
@@ -116,7 +175,16 @@ if args.mobile:
                             "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
                             # Other heavy resources
                             "*.pdf", "*.zip", "*.rar",
-                            # Ad networks (already covered but keeping for safety)
+                            # Google CDN domains (images, thumbnails)
+                            "*googleusercontent.com*",
+                            "*gstatic.com*",
+                            "*encrypted-tbn*",
+                            "*yt3.ggpht.com*",  # YouTube profile pics
+                            "*ytimg.com*",  # YouTube images
+                            # YouTube video thumbnails
+                            "*img.youtube.com*",
+                            "*i.ytimg.com*",
+                            # Ad networks
                             "*.googlesyndication.com*",
                             "*.googletagmanager.com*",
                             "*.google-analytics.com*",
@@ -125,7 +193,7 @@ if args.mobile:
                     )
                 )
             )
-            log_debug("✅ Resource blocking enabled (images, fonts, videos, ads)")
+            log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
 
             # Set User-Agent with platform override (fixes navigator.platform)
             log_debug("Setting UA with platform override...")
@@ -164,31 +232,41 @@ if args.mobile:
             )
             log_debug("Touch emulation enabled (max_touch_points=5)")
 
-            # TESTING: Timezone override commented out - official examples don't use it
-            # Theory: CDP timezone override might be detection signal
-            # if args.proxy and "_city-" in args.proxy:
-            #     try:
-            #         TIMEZONE_MAP = {
-            #             "newyork": "America/New_York",
-            #             "losangeles": "America/Los_Angeles",
-            #             "chicago": "America/Chicago",
-            #             "houston": "America/Chicago",
-            #             "lasvegas": "America/Los_Angeles",
-            #         }
-            #         city = args.proxy.split("_city-")[1].split("@")[0].lower()
-            #         proxy_timezone = TIMEZONE_MAP.get(city)
-            #         if proxy_timezone:
-            #             log_debug(f"Setting timezone to {proxy_timezone} (proxy city: {city})")
-            #             loop.run_until_complete(
-            #                 tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
-            #             )
-            #     except Exception as e:
-            #         log_debug(f"Could not set timezone: {e}")
-            log_debug("Timezone override disabled for testing (following official examples)")
-
-            # NOW open target URL (after device metrics and timezone are set)
+            # Open target URL first (needed for timezone detection)
             log_debug("Opening URL...")
             sb.open(target_url)
+            sb.sleep(2)  # Wait for page to load
+
+            # Detect proxy timezone dynamically using ip-api.com
+            if args.proxy:
+                proxy_data = detect_proxy_timezone(sb, max_retries=3)
+                if proxy_data and proxy_data.get('timezone'):
+                    try:
+                        log_debug(f"Applying dynamic timezone: {proxy_data['timezone']}")
+                        loop.run_until_complete(
+                            tab.send(mycdp.emulation.set_timezone_override(
+                                timezone_id=proxy_data['timezone']
+                            ))
+                        )
+                        log_debug("✅ Dynamic timezone applied")
+
+                        # Optionally set geolocation if coords available
+                        if proxy_data.get('coords'):
+                            coords = proxy_data['coords']
+                            loop.run_until_complete(
+                                tab.send(mycdp.emulation.set_geolocation_override(
+                                    latitude=coords['latitude'],
+                                    longitude=coords['longitude'],
+                                    accuracy=100
+                                ))
+                            )
+                            log_debug(f"✅ Geolocation set: {coords['latitude']}, {coords['longitude']}")
+                    except Exception as e:
+                        log_debug(f"⚠️  Could not apply timezone/geo: {e}")
+                else:
+                    log_debug("⚠️  Skipping timezone override (detection failed)")
+            else:
+                log_debug("No proxy - skipping timezone detection")
 
             # Log actual user agent being used
             try:
@@ -387,30 +465,10 @@ elif args.user_agent:
 if args.mobile:
     chrome_kwargs["mobile"] = True
 
-# Timezone mapping for US cities (improves fingerprint consistency)
-TIMEZONE_MAP = {
-    "newyork": "America/New_York",      # EST/EDT
-    "losangeles": "America/Los_Angeles", # PST/PDT
-    "chicago": "America/Chicago",        # CST/CDT
-    "houston": "America/Chicago",        # CST/CDT (Texas is Central)
-    "lasvegas": "America/Los_Angeles",   # PST/PDT (Nevada is Pacific)
-}
-
-# Extract city from proxy and set timezone if available
-proxy_timezone = None
-if args.proxy and "_city-" in args.proxy:
-    try:
-        city = args.proxy.split("_city-")[1].split("@")[0].lower()
-        proxy_timezone = TIMEZONE_MAP.get(city)
-    except:
-        pass  # If parsing fails, continue without timezone
-
 try:
     log_debug(f"Target URL: {target_url}")
     if args.proxy:
         log_debug(f"Proxy: {args.proxy[:50]}...")
-    if proxy_timezone:
-        log_debug(f"Proxy timezone: {proxy_timezone}")
 
     # Try to warm up Chrome (non-fatal if it fails)
     chrome_path = "/usr/bin/google-chrome-stable"
@@ -451,6 +509,15 @@ try:
                         "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
                         # Other heavy resources
                         "*.pdf", "*.zip", "*.rar",
+                        # Google CDN domains (images, thumbnails)
+                        "*googleusercontent.com*",
+                        "*gstatic.com*",
+                        "*encrypted-tbn*",
+                        "*yt3.ggpht.com*",  # YouTube profile pics
+                        "*ytimg.com*",  # YouTube images
+                        # YouTube video thumbnails
+                        "*img.youtube.com*",
+                        "*i.ytimg.com*",
                         # Ad networks
                         "*.googlesyndication.com*",
                         "*.googletagmanager.com*",
@@ -465,21 +532,46 @@ try:
                 )
             )
         )
-        log_debug("✅ Resource blocking enabled (images, fonts, videos, ads)")
+        log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
     except Exception as e:
         log_debug(f"⚠️  Could not enable resource blocking: {e}")
 
-    # Set timezone to match proxy location (if available)
-    if proxy_timezone:
-        try:
-            loop.run_until_complete(
-                tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
-            )
-        except Exception as e:
-            pass  # Continue even if timezone setting fails
-
     # Wait for page to load
-    sb.sleep(3)
+    sb.sleep(2)
+
+    # Detect and set timezone dynamically based on proxy location
+    if args.proxy:
+        proxy_data = detect_proxy_timezone(sb, max_retries=3)
+        if proxy_data and proxy_data.get('timezone'):
+            try:
+                log_debug(f"Applying dynamic timezone: {proxy_data['timezone']}")
+                loop.run_until_complete(
+                    tab.send(mycdp.emulation.set_timezone_override(
+                        timezone_id=proxy_data['timezone']
+                    ))
+                )
+                log_debug("✅ Dynamic timezone applied")
+
+                # Optionally set geolocation if coords available
+                if proxy_data.get('coords'):
+                    coords = proxy_data['coords']
+                    loop.run_until_complete(
+                        tab.send(mycdp.emulation.set_geolocation_override(
+                            latitude=coords['latitude'],
+                            longitude=coords['longitude'],
+                            accuracy=100
+                        ))
+                    )
+                    log_debug(f"✅ Geolocation set: {coords['latitude']}, {coords['longitude']}")
+            except Exception as e:
+                log_debug(f"⚠️  Could not apply timezone/geo: {e}")
+        else:
+            log_debug("⚠️  Skipping timezone override (detection failed)")
+    else:
+        log_debug("No proxy - skipping timezone detection")
+
+    # Additional wait after timezone/geo setup
+    sb.sleep(1)
 
     # ============================================
     # Handle Google Cookie Consent
