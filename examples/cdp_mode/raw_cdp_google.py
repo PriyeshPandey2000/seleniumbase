@@ -215,42 +215,8 @@ if args.mobile:
             )
             log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
 
-            # Set User-Agent with platform override (fixes navigator.platform)
-            log_debug("Setting UA with platform override...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_user_agent_override(
-                        user_agent=mobile_agent,
-                        platform="Linux aarch64"  # Mobile Android platform
-                    )
-                )
-            )
-
-            # Set device metrics BEFORE opening URL (critical!)
-            log_debug("Setting device metrics override...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_device_metrics_override(
-                        width=412,
-                        height=732,
-                        device_scale_factor=3,
-                        mobile=True
-                    )
-                )
-            )
-            log_debug("Device metrics applied (412x732, mobile=True)")
-
-            # Enable touch emulation (fixes touch events)
-            log_debug("Enabling touch emulation...")
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.emulation.set_touch_emulation_enabled(
-                        enabled=True,
-                        max_touch_points=5  # Standard for mobile devices
-                    )
-                )
-            )
-            log_debug("Touch emulation enabled (max_touch_points=5)")
+            # Note: activate_cdp_mode with agent already sets UA, no need to override again
+            # Manual overrides create inconsistent fingerprints
 
             # Open target URL first (needed for timezone detection)
             log_debug("Opening URL...")
@@ -269,18 +235,6 @@ if args.mobile:
                             ))
                         )
                         log_debug("✅ Dynamic timezone applied")
-
-                        # Optionally set geolocation if coords available
-                        if proxy_data.get('coords'):
-                            coords = proxy_data['coords']
-                            loop.run_until_complete(
-                                tab.send(mycdp.emulation.set_geolocation_override(
-                                    latitude=coords['latitude'],
-                                    longitude=coords['longitude'],
-                                    accuracy=100
-                                ))
-                            )
-                            log_debug(f"✅ Geolocation set: {coords['latitude']}, {coords['longitude']}")
                     except Exception as e:
                         log_debug(f"⚠️  Could not apply timezone/geo: {e}")
                 else:
@@ -571,18 +525,6 @@ try:
                     ))
                 )
                 log_debug("✅ Dynamic timezone applied")
-
-                # Optionally set geolocation if coords available
-                if proxy_data.get('coords'):
-                    coords = proxy_data['coords']
-                    loop.run_until_complete(
-                        tab.send(mycdp.emulation.set_geolocation_override(
-                            latitude=coords['latitude'],
-                            longitude=coords['longitude'],
-                            accuracy=100
-                        ))
-                    )
-                    log_debug(f"✅ Geolocation set: {coords['latitude']}, {coords['longitude']}")
             except Exception as e:
                 log_debug(f"⚠️  Could not apply timezone/geo: {e}")
         else:
