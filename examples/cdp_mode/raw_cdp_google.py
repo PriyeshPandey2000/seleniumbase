@@ -281,24 +281,27 @@ if args.mobile:
             sb.open(target_url)
             sb.sleep(2)  # Wait for page to load
 
-            # Detect proxy timezone dynamically using ip-api.com
-            if args.proxy:
-                proxy_data = detect_proxy_timezone(args.proxy, max_retries=3)
-                if proxy_data and proxy_data.get('timezone'):
-                    try:
-                        log_debug(f"Applying dynamic timezone: {proxy_data['timezone']}")
-                        loop.run_until_complete(
-                            tab.send(mycdp.emulation.set_timezone_override(
-                                timezone_id=proxy_data['timezone']
-                            ))
-                        )
-                        log_debug("✅ Dynamic timezone applied")
-                    except Exception as e:
-                        log_debug(f"⚠️  Could not apply timezone/geo: {e}")
-                else:
-                    log_debug("⚠️  Skipping timezone override (detection failed)")
-            else:
-                log_debug("No proxy - skipping timezone detection")
+            # TESTING: Timezone override disabled - might be detection signal!
+            # Yesterday got some success without it, today 100% CAPTCHA with it
+            log_debug("⚠️  TESTING: Timezone override DISABLED for mobile mode")
+
+            # if args.proxy:
+            #     proxy_data = detect_proxy_timezone(args.proxy, max_retries=3)
+            #     if proxy_data and proxy_data.get('timezone'):
+            #         try:
+            #             log_debug(f"Applying dynamic timezone: {proxy_data['timezone']}")
+            #             loop.run_until_complete(
+            #                 tab.send(mycdp.emulation.set_timezone_override(
+            #                     timezone_id=proxy_data['timezone']
+            #                 ))
+            #             )
+            #             log_debug("✅ Dynamic timezone applied")
+            #         except Exception as e:
+            #             log_debug(f"⚠️  Could not apply timezone/geo: {e}")
+            #     else:
+            #         log_debug("⚠️  Skipping timezone override (detection failed)")
+            # else:
+            #     log_debug("No proxy - skipping timezone detection")
 
             # Log actual user agent being used
             try:
