@@ -100,6 +100,33 @@ if args.mobile:
             tab = sb.cdp.get_active_tab()
             loop = sb.cdp.get_event_loop()
 
+            # Block heavy resources to save proxy bandwidth
+            log_debug("Blocking images, fonts, videos to save bandwidth...")
+            loop.run_until_complete(tab.send(mycdp.network.enable()))
+            loop.run_until_complete(
+                tab.send(
+                    mycdp.network.set_blocked_urls(
+                        urls=[
+                            # Images (biggest bandwidth consumers)
+                            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
+                            "*.svg", "*.ico", "*.bmp",
+                            # Fonts
+                            "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+                            # Videos and media
+                            "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
+                            # Other heavy resources
+                            "*.pdf", "*.zip", "*.rar",
+                            # Ad networks (already covered but keeping for safety)
+                            "*.googlesyndication.com*",
+                            "*.googletagmanager.com*",
+                            "*.google-analytics.com*",
+                            "*.doubleclick.net*",
+                        ]
+                    )
+                )
+            )
+            log_debug("✅ Resource blocking enabled (images, fonts, videos, ads)")
+
             # Set User-Agent with platform override (fixes navigator.platform)
             log_debug("Setting UA with platform override...")
             loop.run_until_complete(
@@ -137,25 +164,27 @@ if args.mobile:
             )
             log_debug("Touch emulation enabled (max_touch_points=5)")
 
-            # Set timezone to match proxy location (if available)
-            if args.proxy and "_city-" in args.proxy:
-                try:
-                    TIMEZONE_MAP = {
-                        "newyork": "America/New_York",
-                        "losangeles": "America/Los_Angeles",
-                        "chicago": "America/Chicago",
-                        "houston": "America/Chicago",
-                        "lasvegas": "America/Los_Angeles",
-                    }
-                    city = args.proxy.split("_city-")[1].split("@")[0].lower()
-                    proxy_timezone = TIMEZONE_MAP.get(city)
-                    if proxy_timezone:
-                        log_debug(f"Setting timezone to {proxy_timezone} (proxy city: {city})")
-                        loop.run_until_complete(
-                            tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
-                        )
-                except Exception as e:
-                    log_debug(f"Could not set timezone: {e}")
+            # TESTING: Timezone override commented out - official examples don't use it
+            # Theory: CDP timezone override might be detection signal
+            # if args.proxy and "_city-" in args.proxy:
+            #     try:
+            #         TIMEZONE_MAP = {
+            #             "newyork": "America/New_York",
+            #             "losangeles": "America/Los_Angeles",
+            #             "chicago": "America/Chicago",
+            #             "houston": "America/Chicago",
+            #             "lasvegas": "America/Los_Angeles",
+            #         }
+            #         city = args.proxy.split("_city-")[1].split("@")[0].lower()
+            #         proxy_timezone = TIMEZONE_MAP.get(city)
+            #         if proxy_timezone:
+            #             log_debug(f"Setting timezone to {proxy_timezone} (proxy city: {city})")
+            #             loop.run_until_complete(
+            #                 tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
+            #             )
+            #     except Exception as e:
+            #         log_debug(f"Could not set timezone: {e}")
+            log_debug("Timezone override disabled for testing (following official examples)")
 
             # NOW open target URL (after device metrics and timezone are set)
             log_debug("Opening URL...")
@@ -317,14 +346,21 @@ else:
     log_debug("DESKTOP MODE - Using existing raw CDP implementation")
     log_debug("=" * 60)
 
+# Detect platform for desktop mode
+is_linux_desktop = platform.system() == "Linux"
+
 # Chrome configuration
 chrome_kwargs = {
     "incognito": True,
     "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
     "headless": False,  # Full headful mode with Xvfb (20-40% CAPTCHA vs 50-70%)
     "headless2": False,  # Disabled - using true headful mode
-    "binary_location": "/usr/bin/google-chrome-stable",
 }
+
+# Platform-specific: Set Chrome binary on Linux only
+if is_linux_desktop:
+    chrome_kwargs["binary_location"] = "/usr/bin/google-chrome-stable"
+    log_debug("Linux detected: Setting Chrome binary for desktop mode")
 
 # Add essential Chrome flags for cloud environments
 chrome_kwargs["chromium_arg"] = [
@@ -394,12 +430,48 @@ try:
     sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
     log_debug("Chrome launched successfully")
 
+    # Block heavy resources to save proxy bandwidth
+    try:
+        import mycdp
+        tab = sb.get_active_tab()
+        loop = sb.get_event_loop()
+
+        log_debug("Blocking images, fonts, videos to save bandwidth...")
+        loop.run_until_complete(tab.send(mycdp.network.enable()))
+        loop.run_until_complete(
+            tab.send(
+                mycdp.network.set_blocked_urls(
+                    urls=[
+                        # Images (biggest bandwidth consumers)
+                        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
+                        "*.svg", "*.ico", "*.bmp",
+                        # Fonts
+                        "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+                        # Videos and media
+                        "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
+                        # Other heavy resources
+                        "*.pdf", "*.zip", "*.rar",
+                        # Ad networks
+                        "*.googlesyndication.com*",
+                        "*.googletagmanager.com*",
+                        "*.google-analytics.com*",
+                        "*.doubleclick.net*",
+                        "*.amazon-adsystem.com*",
+                        "*.adsafeprotected.com*",
+                        "*.fastclick.net*",
+                        "*.snigelweb.com*",
+                        "*.2mdn.net*",
+                    ]
+                )
+            )
+        )
+        log_debug("✅ Resource blocking enabled (images, fonts, videos, ads)")
+    except Exception as e:
+        log_debug(f"⚠️  Could not enable resource blocking: {e}")
+
     # Set timezone to match proxy location (if available)
     if proxy_timezone:
         try:
-            import mycdp
-            tab = sb.get_active_tab()
-            loop = sb.get_event_loop()
             loop.run_until_complete(
                 tab.send(mycdp.emulation.set_timezone_override(timezone_id=proxy_timezone))
             )
