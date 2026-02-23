@@ -21,7 +21,6 @@ import random
 #   - Non-essential domains → block images, fonts, media by type/ext
 # ================================================================
 
-# Essential domains — allow all resource types through
 _ESSENTIAL_DOMAINS = [
     'google.com', 'www.google.com', 'apis.google.com',
     'googleapis.com', 'gstatic.com',
@@ -29,7 +28,6 @@ _ESSENTIAL_DOMAINS = [
     'bing.com', 'cn.bing.com', 'www.bing.com',
 ]
 
-# Domains to always block (ads, tracking, social media)
 _BLOCKED_DOMAINS = [
     'facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com',
     'tiktok.com', 'snapchat.com', 'pinterest.com',
@@ -41,28 +39,25 @@ _BLOCKED_DOMAINS = [
     'quantserve.com', 'googleusercontent.com', 'encrypted-tbn',
 ]
 
-# File extensions to block from non-essential domains
 _BLOCKED_EXTENSIONS = frozenset([
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
-    '.bmp', '.avif', '.tiff',                    # Images
-    '.woff', '.woff2', '.ttf', '.otf', '.eot',   # Fonts
+    '.bmp', '.avif', '.tiff',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
     '.mp4', '.webm', '.avi', '.mov', '.flv',
-    '.m4v', '.mp3', '.wav', '.aac', '.ogg',      # Media
-    '.pdf', '.zip', '.rar', '.gz',               # Archives
+    '.m4v', '.mp3', '.wav', '.aac', '.ogg',
+    '.pdf', '.zip', '.rar', '.gz',
 ])
 
 
 async def bandwidth_saving_handler(event, tab):
     """
     CDP Fetch.RequestPaused handler — blocks unnecessary resources.
-    Registered via tab.add_handler() BEFORE page navigation so every
-    request on the page is intercepted from the first byte.
+    Registered BEFORE page navigation so every request is intercepted.
     """
     import mycdp
     url = event.request.url
     RT = mycdp.network.ResourceType
 
-    # data: URLs are inline — zero proxy bandwidth cost
     if url.startswith('data:'):
         tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
         return
@@ -70,19 +65,16 @@ async def bandwidth_saving_handler(event, tab):
     is_essential = any(d in url for d in _ESSENTIAL_DOMAINS)
     is_blocked = any(d in url for d in _BLOCKED_DOMAINS)
 
-    # Hard-block ad/tracking/social domains
     if is_blocked:
         tab.feed_cdp(mycdp.fetch.fail_request(
             event.request_id, mycdp.network.ErrorReason.TIMED_OUT
         ))
         return
 
-    # Allow all traffic from essential Google/Bing domains
     if is_essential:
         tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
         return
 
-    # Non-essential domain: block by CDP resource type
     resource_type = event.resource_type
     if resource_type in (
         RT.MEDIA, RT.IMAGE, RT.FONT,
@@ -93,7 +85,6 @@ async def bandwidth_saving_handler(event, tab):
         ))
         return
 
-    # Non-essential domain: block by file extension (catch-all for CDNs)
     url_path = url.lower().split('?')[0].split('#')[0]
     if '.' in url_path:
         ext = '.' + url_path.rsplit('.', 1)[-1]
@@ -103,7 +94,6 @@ async def bandwidth_saving_handler(event, tab):
             ))
             return
 
-    # Allow documents, scripts, XHR, fetch, stylesheets from all other domains
     tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
 
 
@@ -334,11 +324,10 @@ if args.mobile:
             )
             log_debug("Touch emulation enabled")
 
-            # Set up request interception BEFORE navigating (active from first request)
-            # Uses Fetch.RequestPaused: allows essential Google domains, blocks ads/images/media
+            # Set up request interception BEFORE navigating
             log_debug("Setting up request interception to save bandwidth...")
             sb.cdp.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
-            log_debug("✅ Request interception enabled (essential Google domains allowed, ads/images/media blocked)")
+            log_debug("✅ Request interception enabled")
 
             # Device settings already applied before page load (see above)
             # Now open target URL with mobile fingerprint already set
@@ -588,18 +577,16 @@ try:
     sb = sb_cdp.Chrome(**chrome_kwargs)
     log_debug("Chrome launched successfully")
 
-    # Get CDP tab and loop
     import mycdp
     tab = sb.get_active_tab()
     loop = sb.get_event_loop()
 
-    # Set up request interception BEFORE navigating (active from first request)
-    # Uses Fetch.RequestPaused: allows essential Google domains, blocks ads/images/media
+    # Set up request interception BEFORE navigating
     log_debug("Setting up request interception to save bandwidth...")
     tab.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
-    log_debug("✅ Request interception enabled (essential Google domains allowed, ads/images/media blocked)")
+    log_debug("✅ Request interception enabled")
 
-    # Navigate to target URL (interception is already active)
+    # Navigate to target URL (interception already active)
     log_debug(f"Navigating to: {target_url}")
     sb.open(target_url)
 
@@ -639,17 +626,17 @@ try:
         # Randomly accept or reject (50/50 chance) to appear more human
         import random
         if random.choice([True, False]):
-            if sb.click_if_visible(reject_selector, timeout=1):
+            if sb.click_if_visible(reject_selector):
                 sb.sleep(1)
                 return True
-            elif sb.click_if_visible(accept_selector, timeout=1):
+            elif sb.click_if_visible(accept_selector):
                 sb.sleep(1)
                 return True
         else:
-            if sb.click_if_visible(accept_selector, timeout=1):
+            if sb.click_if_visible(accept_selector):
                 sb.sleep(1)
                 return True
-            elif sb.click_if_visible(reject_selector, timeout=1):
+            elif sb.click_if_visible(reject_selector):
                 sb.sleep(1)
                 return True
         return False
@@ -677,7 +664,7 @@ try:
 
         for selector in selectors:
             try:
-                if sb.click_if_visible(selector, timeout=0.5):
+                if sb.click_if_visible(selector):
                     sb.sleep(0.5)
             except:
                 continue
