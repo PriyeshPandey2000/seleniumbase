@@ -12,6 +12,101 @@ import urllib.request
 import urllib.error
 import random
 
+# ================================================================
+# BANDWIDTH OPTIMIZATION: Request interception for proxy savings
+# Mirrors Playwright request interceptor logic:
+#   - data: URLs → always allow (no bandwidth cost)
+#   - Essential Google/Bing domains → allow all traffic
+#   - Ad/tracking/social domains → block entirely
+#   - Non-essential domains → block images, fonts, media by type/ext
+# ================================================================
+
+# Essential domains — allow all resource types through
+_ESSENTIAL_DOMAINS = [
+    'google.com', 'www.google.com', 'apis.google.com',
+    'googleapis.com', 'gstatic.com',
+    'fonts.googleapis.com', 'fonts.gstatic.com', 'ssl.gstatic.com',
+    'bing.com', 'cn.bing.com', 'www.bing.com',
+]
+
+# Domains to always block (ads, tracking, social media)
+_BLOCKED_DOMAINS = [
+    'facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com',
+    'tiktok.com', 'snapchat.com', 'pinterest.com',
+    'doubleclick.net', 'googlesyndication.com', 'googletagmanager.com',
+    'google-analytics.com', 'amazon-adsystem.com', 'adsafeprotected.com',
+    'fastclick.net', 'snigelweb.com', '2mdn.net',
+    'outbrain.com', 'taboola.com', 'criteo.com', 'pubmatic.com',
+    'rubiconproject.com', 'moatads.com', 'scorecardresearch.com',
+    'quantserve.com', 'googleusercontent.com', 'encrypted-tbn',
+]
+
+# File extensions to block from non-essential domains
+_BLOCKED_EXTENSIONS = frozenset([
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
+    '.bmp', '.avif', '.tiff',                    # Images
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',   # Fonts
+    '.mp4', '.webm', '.avi', '.mov', '.flv',
+    '.m4v', '.mp3', '.wav', '.aac', '.ogg',      # Media
+    '.pdf', '.zip', '.rar', '.gz',               # Archives
+])
+
+
+async def bandwidth_saving_handler(event, tab):
+    """
+    CDP Fetch.RequestPaused handler — blocks unnecessary resources.
+    Registered via tab.add_handler() BEFORE page navigation so every
+    request on the page is intercepted from the first byte.
+    """
+    import mycdp
+    url = event.request.url
+    RT = mycdp.network.ResourceType
+
+    # data: URLs are inline — zero proxy bandwidth cost
+    if url.startswith('data:'):
+        tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+        return
+
+    is_essential = any(d in url for d in _ESSENTIAL_DOMAINS)
+    is_blocked = any(d in url for d in _BLOCKED_DOMAINS)
+
+    # Hard-block ad/tracking/social domains
+    if is_blocked:
+        tab.feed_cdp(mycdp.fetch.fail_request(
+            event.request_id, mycdp.network.ErrorReason.TIMED_OUT
+        ))
+        return
+
+    # Allow all traffic from essential Google/Bing domains
+    if is_essential:
+        tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+        return
+
+    # Non-essential domain: block by CDP resource type
+    resource_type = event.resource_type
+    if resource_type in (
+        RT.MEDIA, RT.IMAGE, RT.FONT,
+        RT.EVENT_SOURCE, RT.WEB_SOCKET, RT.PING, RT.TEXT_TRACK,
+    ):
+        tab.feed_cdp(mycdp.fetch.fail_request(
+            event.request_id, mycdp.network.ErrorReason.TIMED_OUT
+        ))
+        return
+
+    # Non-essential domain: block by file extension (catch-all for CDNs)
+    url_path = url.lower().split('?')[0].split('#')[0]
+    if '.' in url_path:
+        ext = '.' + url_path.rsplit('.', 1)[-1]
+        if ext in _BLOCKED_EXTENSIONS:
+            tab.feed_cdp(mycdp.fetch.fail_request(
+                event.request_id, mycdp.network.ErrorReason.TIMED_OUT
+            ))
+            return
+
+    # Allow documents, scripts, XHR, fetch, stylesheets from all other domains
+    tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+
+
 # Initialize debug log for troubleshooting
 debug_log = []
 
@@ -239,41 +334,11 @@ if args.mobile:
             )
             log_debug("Touch emulation enabled")
 
-            # Block heavy resources to save proxy bandwidth
-            log_debug("Blocking images, fonts, videos to save bandwidth...")
-            loop.run_until_complete(tab.send(mycdp.network.enable()))
-            loop.run_until_complete(
-                tab.send(
-                    mycdp.network.set_blocked_urls(
-                        urls=[
-                            # Images (biggest bandwidth consumers)
-                            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
-                            "*.svg", "*.ico", "*.bmp",
-                            # Fonts
-                            "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-                            # Videos and media
-                            "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
-                            # Other heavy resources
-                            "*.pdf", "*.zip", "*.rar",
-                            # Google CDN domains (images, thumbnails)
-                            "*googleusercontent.com*",
-                            "*gstatic.com*",
-                            "*encrypted-tbn*",
-                            "*yt3.ggpht.com*",  # YouTube profile pics
-                            "*ytimg.com*",  # YouTube images
-                            # YouTube video thumbnails
-                            "*img.youtube.com*",
-                            "*i.ytimg.com*",
-                            # Ad networks
-                            "*.googlesyndication.com*",
-                            "*.googletagmanager.com*",
-                            "*.google-analytics.com*",
-                            "*.doubleclick.net*",
-                        ]
-                    )
-                )
-            )
-            log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
+            # Set up request interception BEFORE navigating (active from first request)
+            # Uses Fetch.RequestPaused: allows essential Google domains, blocks ads/images/media
+            log_debug("Setting up request interception to save bandwidth...")
+            sb.cdp.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
+            log_debug("✅ Request interception enabled (essential Google domains allowed, ads/images/media blocked)")
 
             # Device settings already applied before page load (see above)
             # Now open target URL with mobile fingerprint already set
@@ -518,58 +583,25 @@ try:
     except:
         pass  # Continue even if warmup fails
 
-    # Launch Chrome with CDP
+    # Launch Chrome without URL — set up interception first, then navigate
     log_debug("Launching Chrome with raw CDP...")
-    sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
+    sb = sb_cdp.Chrome(**chrome_kwargs)
     log_debug("Chrome launched successfully")
 
-    # Block heavy resources to save proxy bandwidth
-    try:
-        import mycdp
-        tab = sb.get_active_tab()
-        loop = sb.get_event_loop()
+    # Get CDP tab and loop
+    import mycdp
+    tab = sb.get_active_tab()
+    loop = sb.get_event_loop()
 
-        log_debug("Blocking images, fonts, videos to save bandwidth...")
-        loop.run_until_complete(tab.send(mycdp.network.enable()))
-        loop.run_until_complete(
-            tab.send(
-                mycdp.network.set_blocked_urls(
-                    urls=[
-                        # Images (biggest bandwidth consumers)
-                        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
-                        "*.svg", "*.ico", "*.bmp",
-                        # Fonts
-                        "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-                        # Videos and media
-                        "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
-                        # Other heavy resources
-                        "*.pdf", "*.zip", "*.rar",
-                        # Google CDN domains (images, thumbnails)
-                        "*googleusercontent.com*",
-                        "*gstatic.com*",
-                        "*encrypted-tbn*",
-                        "*yt3.ggpht.com*",  # YouTube profile pics
-                        "*ytimg.com*",  # YouTube images
-                        # YouTube video thumbnails
-                        "*img.youtube.com*",
-                        "*i.ytimg.com*",
-                        # Ad networks
-                        "*.googlesyndication.com*",
-                        "*.googletagmanager.com*",
-                        "*.google-analytics.com*",
-                        "*.doubleclick.net*",
-                        "*.amazon-adsystem.com*",
-                        "*.adsafeprotected.com*",
-                        "*.fastclick.net*",
-                        "*.snigelweb.com*",
-                        "*.2mdn.net*",
-                    ]
-                )
-            )
-        )
-        log_debug("✅ Resource blocking enabled (images, fonts, videos, ads, Google CDN)")
-    except Exception as e:
-        log_debug(f"⚠️  Could not enable resource blocking: {e}")
+    # Set up request interception BEFORE navigating (active from first request)
+    # Uses Fetch.RequestPaused: allows essential Google domains, blocks ads/images/media
+    log_debug("Setting up request interception to save bandwidth...")
+    tab.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
+    log_debug("✅ Request interception enabled (essential Google domains allowed, ads/images/media blocked)")
+
+    # Navigate to target URL (interception is already active)
+    log_debug(f"Navigating to: {target_url}")
+    sb.open(target_url)
 
     # Wait for page to load
     sb.sleep(2)
