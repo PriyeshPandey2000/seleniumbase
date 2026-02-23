@@ -591,27 +591,56 @@ try:
     tab = sb.get_active_tab()
     loop = sb.get_event_loop()
 
-    # Pattern-based fetch.enable: intercept ONLY Image/Media/Font/EventSource/Ping.
-    # Deliberately EXCLUDES Document so Chrome never pauses navigation requests —
-    # prevents the deadlock where sb_cdp.Chrome's page-load wait hangs forever
-    # because Chrome is blocked waiting for a continue_request that never fires.
-    log_debug("Setting up request interception to save bandwidth...")
-    _RT = mycdp.network.ResourceType
-    _RS = mycdp.fetch.RequestStage
-    patterns = [
-        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.IMAGE, request_stage=_RS.REQUEST),
-        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.MEDIA, request_stage=_RS.REQUEST),
-        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.FONT, request_stage=_RS.REQUEST),
-        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.EVENT_SOURCE, request_stage=_RS.REQUEST),
-        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.PING, request_stage=_RS.REQUEST),
+    # Use set_blocked_urls (Network domain) — does NOT interfere with proxy connections.
+    # network.enable() MUST be called first or the blocked list is silently ignored.
+    log_debug("Setting up URL blocking to save bandwidth...")
+    loop.run_until_complete(tab.send(mycdp.network.enable()))
+    blocked_urls = [
+        # Image extensions (catches most CDN images)
+        "*.jpg", "*.jpg?*", "*.jpeg", "*.jpeg?*",
+        "*.png", "*.png?*", "*.gif", "*.gif?*",
+        "*.webp", "*.webp?*", "*.svg", "*.svg?*",
+        "*.ico", "*.ico?*", "*.bmp", "*.bmp?*",
+        "*.avif", "*.avif?*", "*.tiff", "*.tiff?*",
+        # Font extensions
+        "*.woff", "*.woff?*", "*.woff2", "*.woff2?*",
+        "*.ttf", "*.ttf?*", "*.otf", "*.otf?*", "*.eot", "*.eot?*",
+        # Media extensions
+        "*.mp4", "*.mp4?*", "*.webm", "*.webm?*",
+        "*.mp3", "*.mp3?*", "*.wav", "*.wav?*",
+        "*.avi", "*.avi?*", "*.mov", "*.mov?*",
+        # Google image CDNs that serve EXTENSIONLESS images (biggest gap in extension-only blocking)
+        "*encrypted-tbn0.gstatic.com*",
+        "*encrypted-tbn1.gstatic.com*",
+        "*encrypted-tbn2.gstatic.com*",
+        "*encrypted-tbn3.gstatic.com*",
+        "*googleusercontent.com*",
+        "*ggpht.com*",
+        # Google Fonts (not needed for scraping)
+        "*fonts.gstatic.com*",
+        "*fonts.googleapis.com*",
+        # Ad/tracking domains
+        "*doubleclick.net*",
+        "*googlesyndication.com*",
+        "*googletagmanager.com*",
+        "*google-analytics.com*",
+        "*amazon-adsystem.com*",
+        "*adsafeprotected.com*",
+        "*fastclick.net*",
+        "*snigelweb.com*",
+        "*2mdn.net*",
+        "*outbrain.com*",
+        "*taboola.com*",
+        "*criteo.com*",
+        "*pubmatic.com*",
+        "*rubiconproject.com*",
+        "*moatads.com*",
+        "*scorecardresearch.com*",
+        "*quantserve.com*",
+        "*facebook.com/tr*",
     ]
-    loop.run_until_complete(tab.send(mycdp.fetch.enable(patterns=patterns)))
-    # Prevent _register_handlers() from overriding our custom fetch.enable() call
-    # with a no-patterns version during subsequent navigations inside sb.open().
-    if mycdp.fetch not in tab.enabled_domains:
-        tab.enabled_domains.append(mycdp.fetch)
-    tab.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
-    log_debug("✅ Request interception enabled (Image/Media/Font only, Document excluded)")
+    loop.run_until_complete(tab.send(mycdp.network.set_blocked_urls(urls=blocked_urls)))
+    log_debug(f"✅ URL blocking enabled ({len(blocked_urls)} patterns)")
 
     # Navigate — event loop runs during sb.open(), handler fires for every request
     log_debug(f"Navigating to: {target_url}")
