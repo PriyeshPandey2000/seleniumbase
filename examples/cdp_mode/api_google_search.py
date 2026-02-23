@@ -56,6 +56,23 @@ def health():
     """Health check endpoint"""
     return jsonify({"status": "healthy", "service": "cdp-scraping-api"})
 
+@app.route('/chrome-status', methods=['GET'])
+def chrome_status():
+    """Check whether the persistent desktop Chrome instance is running."""
+    from chrome_desktop import _desktop
+    import time
+
+    running = _desktop._sb is not None
+    alive = _desktop._is_alive() if running else False
+    idle_seconds = round(time.time() - _desktop._last_request_time) if _desktop._last_request_time else None
+
+    return jsonify({
+        "running": running,
+        "alive": alive,
+        "current_proxy": _desktop._current_proxy,
+        "idle_seconds": idle_seconds,
+    })
+
 @app.route('/search', methods=['POST'])
 def search():
     """
