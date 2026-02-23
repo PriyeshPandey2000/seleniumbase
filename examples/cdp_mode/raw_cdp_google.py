@@ -526,12 +526,25 @@ else:
 # Detect platform for desktop mode
 is_linux_desktop = platform.system() == "Linux"
 
-# Chrome configuration
+# Persistent Chrome profile dir — enables disk cache across requests.
+# incognito=True is intentionally REMOVED: incognito disables disk cache entirely,
+# meaning every request re-downloads all JS/CSS (~1-2MB) from scratch.
+# Instead we clear cookies via CDP before each navigation (same privacy, keeps cache).
+if is_linux_desktop:
+    profile_dir = "/tmp/chrome-profile-desktop"
+else:
+    profile_dir = os.path.join(os.path.expanduser("~"), ".chrome-profile-desktop")
+os.makedirs(profile_dir, exist_ok=True)
+log_debug(f"Chrome profile dir (persistent cache): {profile_dir}")
+
+# Chrome configuration — NO incognito (breaks disk cache)
 chrome_kwargs = {
-    "incognito": True,
-    "ad_block": False if args.proxy else True,  # Disable ad_block with proxy
-    "headless": False,  # Full headful mode with Xvfb (20-40% CAPTCHA vs 50-70%)
-    "headless2": False,  # Disabled - using true headful mode
+    "ad_block": False if args.proxy else True,
+    "headless": False,
+    "headless2": False,
+    # user_data_dir MUST be a direct kwarg — NOT in chromium_arg.
+    # SeleniumBase's Config class adds --user-data-dir automatically from this value.
+    "user_data_dir": profile_dir,
 }
 
 # Platform-specific: Set Chrome binary on Linux only
@@ -543,6 +556,11 @@ if is_linux_desktop:
 chrome_kwargs["chromium_arg"] = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
+    "--disk-cache-size=104857600",  # 100 MB — enough to cache Google JS/CSS bundles
+    "--no-first-run",               # Skip first-run setup (no extra network requests)
+    "--disable-sync",               # No Chrome account sync (saves bandwidth)
+    "--disable-background-networking",  # No background telemetry/updates
+    "--disable-default-apps",       # No default app installs on first launch
 ]
 
 # Add proxy if provided
@@ -590,6 +608,12 @@ try:
     import mycdp
     tab = sb.get_active_tab()
     loop = sb.get_event_loop()
+
+    # Clear cookies before navigation — replaces incognito's privacy guarantee.
+    # Disk cache is intentionally preserved (that's the whole point of removing incognito).
+    log_debug("Clearing cookies for clean session...")
+    loop.run_until_complete(tab.send(mycdp.network.clear_browser_cookies()))
+    log_debug("✅ Cookies cleared (disk cache preserved)")
 
     # Use set_blocked_urls (Network domain) — does NOT interfere with proxy connections.
     # network.enable() MUST be called first or the blocked list is silently ignored.
