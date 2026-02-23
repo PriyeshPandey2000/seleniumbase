@@ -7,12 +7,18 @@ import subprocess
 import os
 import sys
 import json
+import threading
+import queue
 
 app = Flask(__name__)
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRAPER_SCRIPT = os.path.join(SCRIPT_DIR, "raw_cdp_google.py")
+
+# Add script dir to path so chrome_desktop can be imported regardless of cwd
+sys.path.insert(0, SCRIPT_DIR)
+from chrome_desktop import scrape_desktop
 
 @app.route('/', methods=['GET'])
 def root():
@@ -99,68 +105,99 @@ def search():
         mobile = data.get('mobile', False)  # Default to False
         screenshot = data.get('screenshot', True)  # Default to True
 
-        # Build command
-        cmd = [sys.executable, SCRAPER_SCRIPT]
-
-        # Add query or URL
-        if query:
-            cmd.append(query)
-        elif url:
-            cmd.extend(['--url', url])
-
-        # Add optional parameters
-        if proxy:
-            cmd.extend(['--proxy', proxy])
-        if user_agent:
-            cmd.extend(['--user-agent', user_agent])
         if mobile:
-            cmd.append('--mobile')
-        if not screenshot:
-            cmd.append('--no-screenshot')
+            # ── MOBILE PATH: unchanged subprocess flow ──────────────────────
+            cmd = [sys.executable, SCRAPER_SCRIPT]
 
-        print(f"[API] Executing: {' '.join(cmd)}")
+            if query:
+                cmd.append(query)
+            elif url:
+                cmd.extend(['--url', url])
 
-        # Run the scraper script
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,  # 2 minute timeout
-            env=os.environ.copy()
-        )
+            if proxy:
+                cmd.extend(['--proxy', proxy])
+            if user_agent:
+                cmd.extend(['--user-agent', user_agent])
+            if mobile:
+                cmd.append('--mobile')
+            if not screenshot:
+                cmd.append('--no-screenshot')
 
-        # Always print script debug logs to server stdout so they appear in deployed logs
-        if result.stderr:
-            print("[API] Script stderr:")
-            print(result.stderr)
+            print(f"[API] Executing: {' '.join(cmd)}")
 
-        # Parse JSON output from script
-        if result.returncode == 0:
-            try:
-                # Script outputs JSON on last line
-                output_lines = result.stdout.strip().split('\n')
-                json_output = output_lines[-1]
-                response_data = json.loads(json_output)
-                return jsonify(response_data), 200
-            except json.JSONDecodeError as e:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,  # 2 minute timeout
+                env=os.environ.copy()
+            )
+
+            # Always print script debug logs to server stdout
+            if result.stderr:
+                print("[API] Script stderr:")
+                print(result.stderr)
+
+            if result.returncode == 0:
+                try:
+                    output_lines = result.stdout.strip().split('\n')
+                    json_output = output_lines[-1]
+                    response_data = json.loads(json_output)
+                    return jsonify(response_data), 200
+                except json.JSONDecodeError as e:
+                    return jsonify({
+                        "success": False,
+                        "error": f"Failed to parse script output: {e}",
+                        "stdout": result.stdout[-500:],
+                        "stderr": result.stderr[-500:]
+                    }), 500
+            else:
                 return jsonify({
                     "success": False,
-                    "error": f"Failed to parse script output: {e}",
-                    "stdout": result.stdout[-500:],
-                    "stderr": result.stderr[-500:]
+                    "error": "Scraping failed",
+                    "stderr": result.stderr[-500:] if result.stderr else "Unknown error",
+                    "stdout": result.stdout[-500:] if result.stdout else None
                 }), 500
+
         else:
-            return jsonify({
-                "success": False,
-                "error": "Scraping failed",
-                "stderr": result.stderr[-500:] if result.stderr else "Unknown error",
-                "stdout": result.stdout[-500:] if result.stdout else None
-            }), 500
+            # ── DESKTOP PATH: persistent Chrome, no subprocess ───────────────
+            if url:
+                target_url = url
+                query_string = None
+            else:
+                query_string = query
+                target_url = f"https://www.google.com/search?q={query}&sourceid=chrome&ie=UTF-8"
+
+            print(f"[API] Desktop scrape: {target_url}")
+
+            result_q = queue.Queue()
+
+            def _run():
+                try:
+                    result_q.put(('ok', scrape_desktop(target_url, proxy, query_string, screenshot)))
+                except Exception as e:
+                    result_q.put(('err', str(e)))
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+
+            try:
+                status, result_data = result_q.get(timeout=120)
+            except queue.Empty:
+                return jsonify({"success": False, "error": "Request timed out"}), 504
+
+            if status == 'err':
+                return jsonify({"success": False, "error": result_data}), 500
+
+            # Print debug logs to server stdout (mirrors mobile stderr printing)
+            for line in result_data.get('debug_info', {}).get('logs', []):
+                print(f"[Desktop] {line}")
+
+            return jsonify(result_data), 200 if result_data.get('success') else 500
 
     except subprocess.TimeoutExpired as e:
-        # Print whatever debug logs the script managed to emit before timeout
+        # Only reachable from the mobile subprocess path
         stderr_output = e.stderr if e.stderr else ""
-        stdout_output = e.output if e.output else ""
         print("[API] ⏰ Script timed out. Last debug output:")
         if stderr_output:
             print(stderr_output)
