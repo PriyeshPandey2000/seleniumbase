@@ -591,11 +591,27 @@ try:
     tab = sb.get_active_tab()
     loop = sb.get_event_loop()
 
-    # Use sync (non-async) handler so Listener calls it directly inside its
-    # own coroutine — no create_task() needed, feed_cdp works via ensure_future.
+    # Pattern-based fetch.enable: intercept ONLY Image/Media/Font/EventSource/Ping.
+    # Deliberately EXCLUDES Document so Chrome never pauses navigation requests —
+    # prevents the deadlock where sb_cdp.Chrome's page-load wait hangs forever
+    # because Chrome is blocked waiting for a continue_request that never fires.
     log_debug("Setting up request interception to save bandwidth...")
+    _RT = mycdp.network.ResourceType
+    _RS = mycdp.fetch.RequestStage
+    patterns = [
+        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.IMAGE, request_stage=_RS.REQUEST),
+        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.MEDIA, request_stage=_RS.REQUEST),
+        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.FONT, request_stage=_RS.REQUEST),
+        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.EVENT_SOURCE, request_stage=_RS.REQUEST),
+        mycdp.fetch.RequestPattern(url_pattern='*', resource_type=_RT.PING, request_stage=_RS.REQUEST),
+    ]
+    loop.run_until_complete(tab.send(mycdp.fetch.enable(patterns=patterns)))
+    # Prevent _register_handlers() from overriding our custom fetch.enable() call
+    # with a no-patterns version during subsequent navigations inside sb.open().
+    if mycdp.fetch not in tab.enabled_domains:
+        tab.enabled_domains.append(mycdp.fetch)
     tab.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
-    log_debug("✅ Request interception enabled")
+    log_debug("✅ Request interception enabled (Image/Media/Font only, Document excluded)")
 
     # Navigate — event loop runs during sb.open(), handler fires for every request
     log_debug(f"Navigating to: {target_url}")
