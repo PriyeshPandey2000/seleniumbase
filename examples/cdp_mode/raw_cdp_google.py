@@ -53,48 +53,58 @@ async def bandwidth_saving_handler(event, tab):
     """
     CDP Fetch.RequestPaused handler — blocks unnecessary resources.
     Registered BEFORE page navigation so every request is intercepted.
+    IMPORTANT: Always calls continue_request or fail_request — a missed
+    call leaves the request paused forever and hangs the page.
     """
     import mycdp
-    url = event.request.url
-    RT = mycdp.network.ResourceType
+    try:
+        url = event.request.url
+        RT = mycdp.network.ResourceType
 
-    if url.startswith('data:'):
-        tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
-        return
+        if url.startswith('data:'):
+            tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+            return
 
-    is_essential = any(d in url for d in _ESSENTIAL_DOMAINS)
-    is_blocked = any(d in url for d in _BLOCKED_DOMAINS)
+        is_essential = any(d in url for d in _ESSENTIAL_DOMAINS)
+        is_blocked = any(d in url for d in _BLOCKED_DOMAINS)
 
-    if is_blocked:
-        tab.feed_cdp(mycdp.fetch.fail_request(
-            event.request_id, mycdp.network.ErrorReason.TIMED_OUT
-        ))
-        return
-
-    if is_essential:
-        tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
-        return
-
-    resource_type = event.resource_type
-    if resource_type in (
-        RT.MEDIA, RT.IMAGE, RT.FONT,
-        RT.EVENT_SOURCE, RT.WEB_SOCKET, RT.PING, RT.TEXT_TRACK,
-    ):
-        tab.feed_cdp(mycdp.fetch.fail_request(
-            event.request_id, mycdp.network.ErrorReason.TIMED_OUT
-        ))
-        return
-
-    url_path = url.lower().split('?')[0].split('#')[0]
-    if '.' in url_path:
-        ext = '.' + url_path.rsplit('.', 1)[-1]
-        if ext in _BLOCKED_EXTENSIONS:
+        if is_blocked:
             tab.feed_cdp(mycdp.fetch.fail_request(
                 event.request_id, mycdp.network.ErrorReason.TIMED_OUT
             ))
             return
 
-    tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+        if is_essential:
+            tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+            return
+
+        resource_type = event.resource_type
+        if resource_type in (
+            RT.MEDIA, RT.IMAGE, RT.FONT,
+            RT.EVENT_SOURCE, RT.WEB_SOCKET, RT.PING, RT.TEXT_TRACK,
+        ):
+            tab.feed_cdp(mycdp.fetch.fail_request(
+                event.request_id, mycdp.network.ErrorReason.TIMED_OUT
+            ))
+            return
+
+        url_path = url.lower().split('?')[0].split('#')[0]
+        if '.' in url_path:
+            ext = '.' + url_path.rsplit('.', 1)[-1]
+            if ext in _BLOCKED_EXTENSIONS:
+                tab.feed_cdp(mycdp.fetch.fail_request(
+                    event.request_id, mycdp.network.ErrorReason.TIMED_OUT
+                ))
+                return
+
+        tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+
+    except Exception:
+        # Safety net: always resolve the paused request or the page hangs forever
+        try:
+            tab.feed_cdp(mycdp.fetch.continue_request(request_id=event.request_id))
+        except Exception:
+            pass
 
 
 # Initialize debug log for troubleshooting
