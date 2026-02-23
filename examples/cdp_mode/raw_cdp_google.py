@@ -582,23 +582,56 @@ try:
     except:
         pass  # Continue even if warmup fails
 
-    # Launch Chrome without URL — set up interception first, then navigate
+    # Launch Chrome with CDP
     log_debug("Launching Chrome with raw CDP...")
-    sb = sb_cdp.Chrome(**chrome_kwargs)
+    sb = sb_cdp.Chrome(target_url, **chrome_kwargs)
     log_debug("Chrome launched successfully")
 
-    import mycdp
-    tab = sb.get_active_tab()
-    loop = sb.get_event_loop()
-
-    # Set up request interception BEFORE navigating
-    log_debug("Setting up request interception to save bandwidth...")
-    tab.add_handler(mycdp.fetch.RequestPaused, bandwidth_saving_handler)
-    log_debug("✅ Request interception enabled")
-
-    # Navigate to target URL (interception already active)
-    log_debug(f"Navigating to: {target_url}")
-    sb.open(target_url)
+    # Block heavy resources to save proxy bandwidth
+    # Using set_blocked_urls (not RequestPaused handler) — sb_cdp.Chrome runs
+    # the event loop manually so async handlers via create_task() never fire,
+    # causing requests to hang forever. set_blocked_urls works synchronously.
+    try:
+        import mycdp
+        tab = sb.get_active_tab()
+        loop = sb.get_event_loop()
+        log_debug("Enabling network domain...")
+        loop.run_until_complete(tab.send(mycdp.network.enable()))
+        log_debug("Setting blocked URLs...")
+        loop.run_until_complete(
+            tab.send(
+                mycdp.network.set_blocked_urls(
+                    urls=[
+                        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp",
+                        "*.svg", "*.ico", "*.bmp",
+                        "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+                        "*.mp4", "*.webm", "*.avi", "*.mov", "*.flv",
+                        "*.pdf", "*.zip", "*.rar",
+                        "*googleusercontent.com*",
+                        "*gstatic.com*",
+                        "*encrypted-tbn*",
+                        "*yt3.ggpht.com*",
+                        "*ytimg.com*",
+                        "*img.youtube.com*",
+                        "*i.ytimg.com*",
+                        "*.googlesyndication.com*",
+                        "*.googletagmanager.com*",
+                        "*.google-analytics.com*",
+                        "*.doubleclick.net*",
+                        "*.amazon-adsystem.com*",
+                        "*.adsafeprotected.com*",
+                        "*.fastclick.net*",
+                        "*.snigelweb.com*",
+                        "*.2mdn.net*",
+                    ]
+                )
+            )
+        )
+        log_debug("✅ Resource blocking enabled")
+    except Exception as e:
+        import traceback
+        log_debug(f"⚠️  Resource blocking failed: {type(e).__name__}: {e}")
+        log_debug(f"⚠️  Traceback: {traceback.format_exc()}")
 
     # Wait for page to load
     sb.sleep(2)

@@ -129,6 +129,11 @@ def search():
             env=os.environ.copy()
         )
 
+        # Always print script debug logs to server stdout so they appear in deployed logs
+        if result.stderr:
+            print("[API] Script stderr:")
+            print(result.stderr)
+
         # Parse JSON output from script
         if result.returncode == 0:
             try:
@@ -152,10 +157,17 @@ def search():
                 "stdout": result.stdout[-500:] if result.stdout else None
             }), 500
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        # Print whatever debug logs the script managed to emit before timeout
+        stderr_output = e.stderr if e.stderr else ""
+        stdout_output = e.output if e.output else ""
+        print("[API] ⏰ Script timed out. Last debug output:")
+        if stderr_output:
+            print(stderr_output)
         return jsonify({
             "success": False,
-            "error": "Request timed out after 2 minutes"
+            "error": "Request timed out after 2 minutes",
+            "last_debug_logs": stderr_output[-2000:] if stderr_output else "no logs captured",
         }), 504
 
     except Exception as e:
