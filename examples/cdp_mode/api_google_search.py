@@ -66,10 +66,14 @@ def chrome_status():
     alive = _desktop._is_alive() if running else False
     idle_seconds = round(time.time() - _desktop._last_request_time) if _desktop._last_request_time else None
 
+    proxy = _desktop._current_proxy
+    if proxy and '@' in proxy:
+        proxy = '***@' + proxy.split('@', 1)[1]  # redact user:pass
+
     return jsonify({
         "running": running,
         "alive": alive,
-        "current_proxy": _desktop._current_proxy,
+        "current_proxy": proxy,
         "idle_seconds": idle_seconds,
     })
 

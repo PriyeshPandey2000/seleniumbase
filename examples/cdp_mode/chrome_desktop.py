@@ -19,6 +19,7 @@ import json
 import base64
 import tempfile
 import random
+import subprocess
 import urllib.request
 import urllib.error
 
@@ -192,6 +193,21 @@ class ChromeDesktop:
                 log_fn(f"Removed stale lock: {lock_file}")
             except OSError:
                 pass  # Doesn't exist — fine
+
+        # Warm up Chrome binary before launching CDP session.
+        # On first deploy this prevents "Failed to connect to the browser"
+        # by ensuring the binary is ready and any one-time init is done.
+        if self._is_linux:
+            try:
+                subprocess.run(
+                    ["/usr/bin/google-chrome-stable",
+                     "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+                     "--dump-dom", "about:blank"],
+                    capture_output=True, text=True, timeout=10
+                )
+                log_fn("Chrome warmup done")
+            except Exception:
+                pass  # Non-fatal — continue regardless
 
         self._sb = sb_cdp.Chrome(**self._build_kwargs(proxy))
         self._tab = self._sb.get_active_tab()
