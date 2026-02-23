@@ -91,6 +91,7 @@ COPY examples/cdp_mode/raw_cdp_google_submit_docker.py /app/
 COPY examples/cdp_mode/raw_cdp_google_submit.py /app/
 COPY examples/cdp_mode/raw_cdp_google.py /app/
 COPY examples/cdp_mode/api_google_search.py /app/
+COPY examples/cdp_mode/chrome_desktop.py /app/
 
 #==================
 # Display Configuration
