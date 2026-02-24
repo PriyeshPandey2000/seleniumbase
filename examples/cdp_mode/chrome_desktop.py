@@ -158,8 +158,12 @@ class ChromeDesktop:
         os.makedirs(self._profile_dir, exist_ok=True)
         os.makedirs(self._cache_dir, exist_ok=True)
 
-        # Background watchdog: actively kills Chrome after IDLE_TIMEOUT seconds.
+        # Lock serialises all scrape() calls — Chrome is single-threaded
+        # and cannot safely serve concurrent CDP requests.
         import threading
+        self._lock = threading.Lock()
+
+        # Background watchdog: actively kills Chrome after IDLE_TIMEOUT seconds.
         t = threading.Thread(target=self._watchdog, daemon=True)
         t.start()
 
@@ -167,13 +171,22 @@ class ChromeDesktop:
         """Polls every 30s and stops Chrome if it has been idle too long."""
         while True:
             time.sleep(30)
+            # Quick non-blocking check before trying to acquire the lock.
             if (
                 self._sb is not None
                 and self._last_request_time > 0
                 and (time.time() - self._last_request_time) > IDLE_TIMEOUT
             ):
-                print("[ChromeDesktop] Idle timeout reached — stopping Chrome", flush=True)
-                self._stop()
+                with self._lock:
+                    # Re-check inside the lock — a request may have arrived
+                    # between the check above and acquiring the lock.
+                    if (
+                        self._sb is not None
+                        and self._last_request_time > 0
+                        and (time.time() - self._last_request_time) > IDLE_TIMEOUT
+                    ):
+                        print("[ChromeDesktop] Idle timeout reached — stopping Chrome", flush=True)
+                        self._stop()
 
     def _build_kwargs(self, proxy):
         kwargs = {
@@ -386,119 +399,145 @@ class ChromeDesktop:
         def log_fn(msg):
             debug_log.append(msg)
 
-        try:
-            self._ensure_ready(proxy, log_fn)
-            self._last_request_time = time.time()
+        with self._lock:
+            try:
+                self._ensure_ready(proxy, log_fn)
+                self._last_request_time = time.time()
 
-            # Clear cookies before navigation — same privacy as incognito,
-            # but disk cache is preserved (that's the whole point).
-            self._loop.run_until_complete(
-                self._tab.send(mycdp.network.clear_browser_cookies())
-            )
-            log_fn("✅ Cookies cleared (disk cache preserved)")
-
-            log_fn(f"Navigating to: {target_url}")
-            self._sb.open(target_url)
-            self._sb.sleep(2)
-
-            # Detect and apply timezone from proxy location
-            if proxy:
-                proxy_data = detect_proxy_timezone(proxy, log_fn, max_retries=3)
-                if proxy_data and proxy_data.get('timezone'):
-                    try:
-                        log_fn(f"Applying dynamic timezone: {proxy_data['timezone']}")
-                        self._loop.run_until_complete(
-                            self._tab.send(mycdp.emulation.set_timezone_override(
-                                timezone_id=proxy_data['timezone']
-                            ))
-                        )
-                        log_fn("✅ Dynamic timezone applied")
-                    except Exception as e:
-                        log_fn(f"⚠️  Could not apply timezone: {e}")
-                else:
-                    log_fn("⚠️  Skipping timezone override (detection failed)")
-            else:
-                log_fn("No proxy - skipping timezone detection")
-
-            self._sb.sleep(1)
-
-            self._handle_cookie_consent()
-            self._dismiss_popups()
-
-            self._sb.scroll_to_bottom()
-            self._sb.sleep(1)
-            self._sb.scroll_to_top()
-            self._sb.sleep(1)
-
-            final_url = self._sb.get_current_url()
-            log_fn(f"Final URL: {final_url}")
-
-            page_html = self._sb.get_page_source()
-            log_fn(f"HTML length: {len(page_html):,} chars")
-
-            # Screenshot
-            screenshot_base64 = None
-            if take_screenshot:
-                log_fn("Capturing screenshot...")
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    tmp_path = tmp.name
-
-                self._sb.loop.run_until_complete(
-                    self._sb.page.save_screenshot(tmp_path, full_page=True)
+                # Clear cookies before navigation — same privacy as incognito,
+                # but disk cache is preserved (that's the whole point).
+                self._loop.run_until_complete(
+                    self._tab.send(mycdp.network.clear_browser_cookies())
                 )
+                log_fn("✅ Cookies cleared (disk cache preserved)")
 
-                with open(tmp_path, 'rb') as f:
-                    screenshot_base64 = base64.b64encode(f.read()).decode('utf-8')
+                log_fn(f"Navigating to: {target_url}")
+                self._sb.open(target_url)
+                self._sb.sleep(2)
 
-                os.remove(tmp_path)
+                # Detect and apply timezone from proxy location
+                if proxy:
+                    proxy_data = detect_proxy_timezone(proxy, log_fn, max_retries=3)
+                    if proxy_data and proxy_data.get('timezone'):
+                        try:
+                            log_fn(f"Applying dynamic timezone: {proxy_data['timezone']}")
+                            self._loop.run_until_complete(
+                                self._tab.send(mycdp.emulation.set_timezone_override(
+                                    timezone_id=proxy_data['timezone']
+                                ))
+                            )
+                            log_fn("✅ Dynamic timezone applied")
+                        except Exception as e:
+                            log_fn(f"⚠️  Could not apply timezone: {e}")
+                    else:
+                        log_fn("⚠️  Skipping timezone override (detection failed)")
+                else:
+                    log_fn("No proxy - skipping timezone detection")
 
-                screenshot_len = len(screenshot_base64)
-                log_fn(f"Screenshot size: {screenshot_len:,} chars")
-                if screenshot_len < 100000:
-                    log_fn("⚠️  Small screenshot (<100k) - possible CAPTCHA")
-                elif screenshot_len > 500000:
-                    log_fn("✅ Large screenshot (>500k) - likely real content")
+                self._sb.sleep(1)
 
-            self._last_request_time = time.time()
+                self._handle_cookie_consent()
+                self._dismiss_popups()
 
-            response = {
-                "success": True,
-                "url": final_url,
-                "html": page_html,
-                "debug_info": {
-                    "mode": "desktop",
-                    "implementation": "Persistent Chrome (ChromeDesktop)",
-                    "logs": debug_log,
-                    "html_length": len(page_html),
-                },
-            }
+                self._sb.scroll_to_bottom()
+                self._sb.sleep(1)
+                self._sb.scroll_to_top()
+                self._sb.sleep(1)
 
-            if screenshot_base64:
-                response["screenshot_base64"] = screenshot_base64
-                response["debug_info"]["screenshot_length"] = len(screenshot_base64)
+                final_url = self._sb.get_current_url()
+                log_fn(f"Final URL: {final_url}")
 
-            if query_string:
-                response["query"] = query_string
+                page_html = self._sb.get_page_source()
+                html_length = len(page_html)
+                log_fn(f"HTML length: {html_length:,} chars")
 
-            if proxy:
-                response["proxy"] = proxy
+                # CAPTCHA detection — stop Chrome so next request gets a
+                # fresh session instead of continuing with a burnt one.
+                is_captcha = (
+                    '/sorry/' in final_url
+                    or 'sorry.google.com' in final_url
+                    or html_length < 500_000
+                    or 'detected unusual traffic' in page_html.lower()
+                )
+                if is_captcha:
+                    log_fn(f"⚠️  CAPTCHA detected (html={html_length:,}, url={final_url}) — stopping Chrome")
+                    self._stop()
+                    return {
+                        "success": False,
+                        "captcha": True,
+                        "error": "CAPTCHA detected",
+                        "url": final_url,
+                        "debug_info": {
+                            "mode": "desktop",
+                            "implementation": "Persistent Chrome (ChromeDesktop)",
+                            "logs": debug_log,
+                            "html_length": html_length,
+                        },
+                    }
 
-            log_fn("✅ Desktop scraping completed")
-            return response
+                # Screenshot
+                screenshot_base64 = None
+                if take_screenshot:
+                    log_fn("Capturing screenshot...")
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                        tmp_path = tmp.name
 
-        except Exception as e:
-            log_fn(f"❌ Desktop scrape error: {str(e)}")
-            self._stop()
-            return {
-                "success": False,
-                "error": str(e),
-                "url": target_url,
-                "debug_info": {
-                    "mode": "desktop",
-                    "implementation": "Persistent Chrome (ChromeDesktop)",
-                    "logs": debug_log,
-                },
-            }
+                    self._sb.loop.run_until_complete(
+                        self._sb.page.save_screenshot(tmp_path, full_page=True)
+                    )
+
+                    with open(tmp_path, 'rb') as f:
+                        screenshot_base64 = base64.b64encode(f.read()).decode('utf-8')
+
+                    os.remove(tmp_path)
+
+                    screenshot_len = len(screenshot_base64)
+                    log_fn(f"Screenshot size: {screenshot_len:,} chars")
+                    if screenshot_len < 100000:
+                        log_fn("⚠️  Small screenshot (<100k) - possible CAPTCHA")
+                    elif screenshot_len > 500000:
+                        log_fn("✅ Large screenshot (>500k) - likely real content")
+
+                self._last_request_time = time.time()
+
+                response = {
+                    "success": True,
+                    "url": final_url,
+                    "html": page_html,
+                    "debug_info": {
+                        "mode": "desktop",
+                        "implementation": "Persistent Chrome (ChromeDesktop)",
+                        "logs": debug_log,
+                        "html_length": html_length,
+                    },
+                }
+
+                if screenshot_base64:
+                    response["screenshot_base64"] = screenshot_base64
+                    response["debug_info"]["screenshot_length"] = len(screenshot_base64)
+
+                if query_string:
+                    response["query"] = query_string
+
+                if proxy:
+                    response["proxy"] = proxy
+
+                log_fn("✅ Desktop scraping completed")
+                return response
+
+            except Exception as e:
+                log_fn(f"❌ Desktop scrape error: {str(e)}")
+                self._stop()
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "url": target_url,
+                    "debug_info": {
+                        "mode": "desktop",
+                        "implementation": "Persistent Chrome (ChromeDesktop)",
+                        "logs": debug_log,
+                    },
+                }
 
 
 # Module-level singleton — one Chrome process shared across all requests.
