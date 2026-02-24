@@ -150,10 +150,13 @@ class ChromeDesktop:
 
         if self._is_linux:
             self._profile_dir = "/tmp/chrome-profile-desktop"
+            self._cache_dir = "/tmp/chrome-cache-desktop"
         else:
             self._profile_dir = os.path.expanduser("~/.chrome-profile-desktop")
+            self._cache_dir = os.path.expanduser("~/.chrome-cache-desktop")
 
         os.makedirs(self._profile_dir, exist_ok=True)
+        os.makedirs(self._cache_dir, exist_ok=True)
 
         # Background watchdog: actively kills Chrome after IDLE_TIMEOUT seconds.
         import threading
@@ -162,7 +165,6 @@ class ChromeDesktop:
 
     def _watchdog(self):
         """Polls every 30s and stops Chrome if it has been idle too long."""
-        import threading
         while True:
             time.sleep(30)
             if (
@@ -189,11 +191,24 @@ class ChromeDesktop:
         kwargs["chromium_arg"] = [
             "--no-sandbox",
             "--disable-dev-shm-usage",
-            "--disk-cache-size=104857600",   # 100 MB — cache Google JS/CSS bundles
-            "--no-first-run",                # Skip first-run setup
-            "--disable-sync",               # No Chrome account sync
+            "--no-first-run",
+            "--disable-sync",
             "--disable-background-networking",
             "--disable-default-apps",
+            "--disable-component-update",   # Stop Chrome auto-update downloads through proxy
+            # Explicit disk cache dir — forces Chrome to use disk cache even when
+            # a proxy is active (proxy mode can silently switch to memory-only cache)
+            f"--disk-cache-dir={self._cache_dir}",
+            "--disk-cache-size=209715200",  # 200 MB
+            # Null-route Chrome telemetry/update domains at DNS level so they
+            # never reach the proxy at all
+            "--host-resolver-rules="
+            "MAP *.gvt1.com 0.0.0.0,"
+            "MAP update.googleapis.com 0.0.0.0,"
+            "MAP dl.google.com 0.0.0.0,"
+            "MAP edgedl.me.gvt1.com 0.0.0.0",
+            # Kill remaining background callers
+            "--disable-features=OptimizationHints,MediaRouter,CertificateTransparencyComponentUpdater",
         ]
 
         if proxy:
