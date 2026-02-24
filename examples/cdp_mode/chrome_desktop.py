@@ -155,6 +155,24 @@ class ChromeDesktop:
 
         os.makedirs(self._profile_dir, exist_ok=True)
 
+        # Background watchdog: actively kills Chrome after IDLE_TIMEOUT seconds.
+        import threading
+        t = threading.Thread(target=self._watchdog, daemon=True)
+        t.start()
+
+    def _watchdog(self):
+        """Polls every 30s and stops Chrome if it has been idle too long."""
+        import threading
+        while True:
+            time.sleep(30)
+            if (
+                self._sb is not None
+                and self._last_request_time > 0
+                and (time.time() - self._last_request_time) > IDLE_TIMEOUT
+            ):
+                print("[ChromeDesktop] Idle timeout reached — stopping Chrome", flush=True)
+                self._stop()
+
     def _build_kwargs(self, proxy):
         kwargs = {
             "ad_block": False if proxy else True,
