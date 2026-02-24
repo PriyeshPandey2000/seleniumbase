@@ -216,20 +216,54 @@ class ChromeDesktop:
 
         return kwargs
 
-    def _start(self, proxy, log_fn):
-        import mycdp
+    def _cache_is_cold(self):
+        """True if the disk cache has never been written (server cold start)."""
+        # Chrome writes an 'index' file on first cache write. If it doesn't
+        # exist the cache is empty and a proxy-free warmup run is worthwhile.
+        return not os.path.exists(os.path.join(self._cache_dir, "index"))
 
-        # Remove stale lock files left by crashed/killed Chrome sessions.
+    def _remove_lock_files(self):
         for lock_file in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
             try:
                 os.remove(os.path.join(self._profile_dir, lock_file))
-                log_fn(f"Removed stale lock: {lock_file}")
             except OSError:
-                pass  # Doesn't exist — fine
+                pass
+
+    def _populate_cache(self, log_fn):
+        """Start Chrome WITHOUT proxy, load Google to populate the disk cache,
+        then stop. Runs only when cache is cold (server start / fresh deploy).
+        Subsequent cold starts skip this — cache already exists on disk."""
+        import mycdp
+        log_fn("Cache is cold — pre-warming without proxy (saves proxy bandwidth on first real request)...")
+        try:
+            self._remove_lock_files()
+            sb = sb_cdp.Chrome(**self._build_kwargs(proxy=None))
+            tab = sb.get_active_tab()
+            loop = sb.get_event_loop()
+            loop.run_until_complete(tab.send(mycdp.network.enable()))
+            loop.run_until_complete(tab.send(mycdp.network.set_blocked_urls(urls=BLOCKED_URLS)))
+            sb.open("https://www.google.com/search?q=test")
+            time.sleep(5)  # Let JS/CSS bundles fully download and flush to cache
+            sb.driver.stop()
+            log_fn("✅ Cache pre-warmed — Google JS/CSS now on disk")
+        except Exception as e:
+            log_fn(f"⚠️  Cache pre-warm failed (non-fatal): {e}")
+        finally:
+            self._remove_lock_files()
+
+    def _start(self, proxy, log_fn):
+        import mycdp
+
+        # If cache is cold and a proxy is in use, pre-populate the disk cache
+        # without the proxy first. When real Chrome starts with the proxy, JS/CSS
+        # is served from disk → only the HTML response goes through the proxy.
+        if proxy and self._cache_is_cold():
+            self._populate_cache(log_fn)
+
+        self._remove_lock_files()
 
         # Warm up Chrome binary before launching CDP session.
-        # On first deploy this prevents "Failed to connect to the browser"
-        # by ensuring the binary is ready and any one-time init is done.
+        # On first deploy this prevents "Failed to connect to the browser".
         if self._is_linux:
             try:
                 subprocess.run(
@@ -238,9 +272,8 @@ class ChromeDesktop:
                      "--dump-dom", "about:blank"],
                     capture_output=True, text=True, timeout=10
                 )
-                log_fn("Chrome warmup done")
             except Exception:
-                pass  # Non-fatal — continue regardless
+                pass
 
         self._sb = sb_cdp.Chrome(**self._build_kwargs(proxy))
         self._tab = self._sb.get_active_tab()
