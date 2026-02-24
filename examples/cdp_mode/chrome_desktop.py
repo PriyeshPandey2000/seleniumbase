@@ -150,12 +150,15 @@ class ChromeDesktop:
 
         if self._is_linux:
             self._profile_dir = "/tmp/chrome-profile-desktop"
+            self._warmup_profile_dir = "/tmp/chrome-profile-desktop-warmup"
             self._cache_dir = "/tmp/chrome-cache-desktop"
         else:
             self._profile_dir = os.path.expanduser("~/.chrome-profile-desktop")
+            self._warmup_profile_dir = os.path.expanduser("~/.chrome-profile-desktop-warmup")
             self._cache_dir = os.path.expanduser("~/.chrome-cache-desktop")
 
         os.makedirs(self._profile_dir, exist_ok=True)
+        os.makedirs(self._warmup_profile_dir, exist_ok=True)
         os.makedirs(self._cache_dir, exist_ok=True)
 
         # Lock serialises all scrape() calls — Chrome is single-threaded
@@ -242,15 +245,27 @@ class ChromeDesktop:
             except OSError:
                 pass
 
+    def _remove_warmup_lock_files(self):
+        for lock_file in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
+            try:
+                os.remove(os.path.join(self._warmup_profile_dir, lock_file))
+            except OSError:
+                pass
+
     def _populate_cache(self, log_fn):
         """Start Chrome WITHOUT proxy, load Google to populate the disk cache,
         then stop. Runs only when cache is cold (server start / fresh deploy).
-        Subsequent cold starts skip this — cache already exists on disk."""
+        Uses a separate warmup profile dir so a crash here can never lock the
+        main profile dir and cause the real Chrome start to fail."""
         import mycdp
         log_fn("Cache is cold — pre-warming without proxy (saves proxy bandwidth on first real request)...")
         try:
-            self._remove_lock_files()
-            sb = sb_cdp.Chrome(**self._build_kwargs(proxy=None))
+            self._remove_warmup_lock_files()
+            # Override user_data_dir with the warmup-specific profile.
+            # --disk-cache-dir stays the same so both Chromes share one cache.
+            kwargs = self._build_kwargs(proxy=None)
+            kwargs["user_data_dir"] = self._warmup_profile_dir
+            sb = sb_cdp.Chrome(**kwargs)
             tab = sb.get_active_tab()
             loop = sb.get_event_loop()
             loop.run_until_complete(tab.send(mycdp.network.enable()))
@@ -262,7 +277,7 @@ class ChromeDesktop:
         except Exception as e:
             log_fn(f"⚠️  Cache pre-warm failed (non-fatal): {e}")
         finally:
-            self._remove_lock_files()
+            self._remove_warmup_lock_files()
 
     def _start(self, proxy, log_fn):
         import mycdp
