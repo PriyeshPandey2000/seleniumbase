@@ -282,10 +282,12 @@ class ChromeDesktop:
     def _start(self, proxy, log_fn):
         import mycdp
 
-        # If cache is cold and a proxy is in use, pre-populate the disk cache
-        # without the proxy first. When real Chrome starts with the proxy, JS/CSS
-        # is served from disk → only the HTML response goes through the proxy.
-        if proxy and self._cache_is_cold():
+        # Always pre-populate the disk cache without proxy before starting the
+        # proxied Chrome. Google's versioned JS URLs rotate frequently so a
+        # stale cache is as expensive as a cold one (~6MB). Running warmup on
+        # every Chrome start ensures the cache has current JS versions, keeping
+        # proxy usage at ~10KB per request (just HTML) instead of ~6MB.
+        if proxy:
             self._populate_cache(log_fn)
 
         self._remove_lock_files()
