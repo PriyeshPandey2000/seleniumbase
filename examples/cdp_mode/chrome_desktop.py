@@ -77,6 +77,19 @@ BLOCKED_URLS = [
     "*scorecardresearch.com*",
     "*quantserve.com*",
     "*facebook.com/tr*",
+    # Google post-load tracking & logging (fires after page load, not needed)
+    "*google.com/gen_204*",
+    "*google.com/client_204*",
+    "*google.com/log*",
+    "*google.com/complete/search*",
+    "*google.com/searchbyimage*",
+    "*google.com/async/*",
+    "*google.com/s?*",
+    # Google Maps tiles (hotel search loads maps)
+    "*maps.googleapis.com*",
+    "*maps.gstatic.com*",
+    "*/maps/vt*",
+    "*/maps/api*",
 ]
 
 # Module-level cache-warmup coordination — only one worker should warm
