@@ -477,10 +477,11 @@ class ChromeDesktop:
                 self._handle_cookie_consent()
                 self._dismiss_popups()
 
-                self._sb.scroll_to_bottom()
-                self._sb.sleep(1)
-                self._sb.scroll_to_top()
-                self._sb.sleep(1)
+                # Disabled extra scrolling to reduce bandwidth.
+                # self._sb.scroll_to_bottom()
+                # self._sb.sleep(1)
+                # self._sb.scroll_to_top()
+                # self._sb.sleep(1)
 
                 final_url = self._sb.get_current_url()
                 log_fn(f"{self._log_prefix()} Final URL: {final_url}")
