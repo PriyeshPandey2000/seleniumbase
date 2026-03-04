@@ -18,7 +18,7 @@ SCRAPER_SCRIPT = os.path.join(SCRIPT_DIR, "raw_cdp_google.py")
 
 # Add script dir to path so chrome_desktop can be imported regardless of cwd
 sys.path.insert(0, SCRIPT_DIR)
-from chrome_desktop import scrape_desktop
+from chrome_desktop import scrape_desktop, get_pool_status
 
 @app.route('/', methods=['GET'])
 def root():
@@ -58,24 +58,8 @@ def health():
 
 @app.route('/chrome-status', methods=['GET'])
 def chrome_status():
-    """Check whether the persistent desktop Chrome instance is running."""
-    from chrome_desktop import _desktop
-    import time
-
-    running = _desktop._sb is not None
-    alive = _desktop._is_alive() if running else False
-    idle_seconds = round(time.time() - _desktop._last_request_time) if _desktop._last_request_time else None
-
-    proxy = _desktop._current_proxy
-    if proxy and '@' in proxy:
-        proxy = '***@' + proxy.split('@', 1)[1]  # redact user:pass
-
-    return jsonify({
-        "running": running,
-        "alive": alive,
-        "current_proxy": proxy,
-        "idle_seconds": idle_seconds,
-    })
+    """Check status of all Chrome pool workers."""
+    return jsonify(get_pool_status())
 
 @app.route('/search', methods=['POST'])
 def search():
@@ -214,6 +198,10 @@ def search():
             for line in result_data.get('debug_info', {}).get('logs', []):
                 print(f"[Desktop] {line}")
 
+            dbg = result_data.get('debug_info', {})
+            if 'bandwidth_kb' in dbg:
+                print(f"[API] Bandwidth: {dbg['bandwidth_kb']} KB ({dbg['bandwidth_mb']} MB) | est. 1000 requests = {round(dbg['bandwidth_kb'] * 1000 / 1024, 1)} MB")
+
             return jsonify(result_data), 200 if result_data.get('success') else 500
 
     except subprocess.TimeoutExpired as e:
@@ -248,4 +236,4 @@ if __name__ == '__main__':
     print("\nStarting server on http://localhost:5000")
     print("=" * 60)
 
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)

@@ -1,10 +1,13 @@
-"""Persistent Chrome Desktop singleton for CDP-mode scraping.
+"""Persistent Chrome Desktop pool for CDP-mode scraping.
 
-Keeps a single Chrome process alive across requests so Google JS/CSS
+Keeps N Chrome processes alive across requests so Google JS/CSS
 (~1 MB) stays in the disk cache. Subsequent requests only fetch fresh
 HTML + hotel data (~300–500 KB) instead of ~1.5 MB per request.
 
-Restart conditions:
+Pool size is controlled by the CHROME_POOL_SIZE env var (default: 1).
+Set to 2 or 3 for concurrent requests.
+
+Restart conditions (per worker):
   - First request         → start Chrome
   - Proxy changed         → stop old, start new
   - Idle > IDLE_TIMEOUT   → stop, restart on next request
@@ -17,9 +20,11 @@ import platform
 import time
 import json
 import base64
+import queue
 import tempfile
 import random
 import subprocess
+import threading
 import urllib.request
 import urllib.error
 
@@ -73,6 +78,11 @@ BLOCKED_URLS = [
     "*quantserve.com*",
     "*facebook.com/tr*",
 ]
+
+# Module-level cache-warmup coordination — only one worker should warm
+# the shared cache; others skip if warmup is already done or in progress.
+_cache_warm_lock = threading.Lock()
+_cache_warmed = False
 
 
 def detect_proxy_timezone(proxy_string, log_fn, max_retries=3):
@@ -138,9 +148,10 @@ def detect_proxy_timezone(proxy_string, log_fn, max_retries=3):
 
 
 class ChromeDesktop:
-    """Persistent singleton Chrome instance for desktop CDP scraping."""
+    """One persistent Chrome worker within the pool."""
 
-    def __init__(self):
+    def __init__(self, index=0, shared_cache_dir=None):
+        self._index = index
         self._sb = None
         self._tab = None
         self._loop = None
@@ -149,46 +160,50 @@ class ChromeDesktop:
         self._is_linux = platform.system() == "Linux"
 
         if self._is_linux:
-            self._profile_dir = "/tmp/chrome-profile-desktop"
-            self._warmup_profile_dir = "/tmp/chrome-profile-desktop-warmup"
-            self._cache_dir = "/tmp/chrome-cache-desktop"
+            self._profile_dir = f"/tmp/chrome-profile-desktop-{index}"
+            self._warmup_profile_dir = f"/tmp/chrome-profile-desktop-warmup-{index}"
+            # All workers share one cache dir so warmup only needs to run once
+            self._cache_dir = shared_cache_dir or "/tmp/chrome-cache-desktop"
         else:
-            self._profile_dir = os.path.expanduser("~/.chrome-profile-desktop")
-            self._warmup_profile_dir = os.path.expanduser("~/.chrome-profile-desktop-warmup")
-            self._cache_dir = os.path.expanduser("~/.chrome-cache-desktop")
+            base = os.path.expanduser("~")
+            self._profile_dir = f"{base}/.chrome-profile-desktop-{index}"
+            self._warmup_profile_dir = f"{base}/.chrome-profile-desktop-warmup-{index}"
+            self._cache_dir = shared_cache_dir or os.path.expanduser("~/.chrome-cache-desktop")
 
         os.makedirs(self._profile_dir, exist_ok=True)
         os.makedirs(self._warmup_profile_dir, exist_ok=True)
         os.makedirs(self._cache_dir, exist_ok=True)
 
-        # Lock serialises all scrape() calls — Chrome is single-threaded
-        # and cannot safely serve concurrent CDP requests.
-        import threading
+        # Lock serialises scrape() vs watchdog for THIS worker only.
         self._lock = threading.Lock()
 
-        # Background watchdog: actively kills Chrome after IDLE_TIMEOUT seconds.
+        # Bandwidth tracking per request (encoded_data_length = actual wire bytes)
+        self._bytes_lock = threading.Lock()
+        self._request_bytes = 0
+
+        # Per-worker watchdog: stops Chrome after IDLE_TIMEOUT seconds.
         t = threading.Thread(target=self._watchdog, daemon=True)
         t.start()
+
+    def _log_prefix(self):
+        return f"[Worker-{self._index}]"
 
     def _watchdog(self):
         """Polls every 30s and stops Chrome if it has been idle too long."""
         while True:
             time.sleep(30)
-            # Quick non-blocking check before trying to acquire the lock.
             if (
                 self._sb is not None
                 and self._last_request_time > 0
                 and (time.time() - self._last_request_time) > IDLE_TIMEOUT
             ):
                 with self._lock:
-                    # Re-check inside the lock — a request may have arrived
-                    # between the check above and acquiring the lock.
                     if (
                         self._sb is not None
                         and self._last_request_time > 0
                         and (time.time() - self._last_request_time) > IDLE_TIMEOUT
                     ):
-                        print("[ChromeDesktop] Idle timeout reached — stopping Chrome", flush=True)
+                        print(f"{self._log_prefix()} Idle timeout — stopping Chrome", flush=True)
                         self._stop()
 
     def _build_kwargs(self, proxy):
@@ -196,8 +211,6 @@ class ChromeDesktop:
             "ad_block": False if proxy else True,
             "headless": False,
             "headless2": False,
-            # user_data_dir must be a direct kwarg — SeleniumBase adds
-            # --user-data-dir automatically from this value.
             "user_data_dir": self._profile_dir,
         }
 
@@ -211,19 +224,14 @@ class ChromeDesktop:
             "--disable-sync",
             "--disable-background-networking",
             "--disable-default-apps",
-            "--disable-component-update",   # Stop Chrome auto-update downloads through proxy
-            # Explicit disk cache dir — forces Chrome to use disk cache even when
-            # a proxy is active (proxy mode can silently switch to memory-only cache)
+            "--disable-component-update",
             f"--disk-cache-dir={self._cache_dir}",
             "--disk-cache-size=209715200",  # 200 MB
-            # Null-route Chrome telemetry/update domains at DNS level so they
-            # never reach the proxy at all
             "--host-resolver-rules="
             "MAP *.gvt1.com 0.0.0.0,"
             "MAP update.googleapis.com 0.0.0.0,"
             "MAP dl.google.com 0.0.0.0,"
             "MAP edgedl.me.gvt1.com 0.0.0.0",
-            # Kill remaining background callers
             "--disable-features=OptimizationHints,MediaRouter,CertificateTransparencyComponentUpdater",
         ]
 
@@ -233,9 +241,6 @@ class ChromeDesktop:
         return kwargs
 
     def _cache_is_cold(self):
-        """True if the disk cache has never been written (server cold start)."""
-        # Chrome writes an 'index' file on first cache write. If it doesn't
-        # exist the cache is empty and a proxy-free warmup run is worthwhile.
         return not os.path.exists(os.path.join(self._cache_dir, "index"))
 
     def _remove_lock_files(self):
@@ -253,16 +258,21 @@ class ChromeDesktop:
                 pass
 
     def _populate_cache(self, log_fn):
-        """Start Chrome WITHOUT proxy, load Google to populate the disk cache,
-        then stop. Runs only when cache is cold (server start / fresh deploy).
-        Uses a separate warmup profile dir so a crash here can never lock the
-        main profile dir and cause the real Chrome start to fail."""
+        """Pre-warm shared disk cache without proxy. Only one worker does this;
+        others skip if warmup is already done or in progress."""
+        global _cache_warmed
+
+        with _cache_warm_lock:
+            if _cache_warmed:
+                log_fn(f"{self._log_prefix()} Cache already warmed by another worker — skipping warmup")
+                return
+            # Mark as warmed immediately so concurrent workers don't double-warm
+            _cache_warmed = True
+
         import mycdp
-        log_fn("Cache is cold — pre-warming without proxy (saves proxy bandwidth on first real request)...")
+        log_fn(f"{self._log_prefix()} Pre-warming cache without proxy (saves proxy bandwidth on first real request)...")
         try:
             self._remove_warmup_lock_files()
-            # Override user_data_dir with the warmup-specific profile.
-            # --disk-cache-dir stays the same so both Chromes share one cache.
             kwargs = self._build_kwargs(proxy=None)
             kwargs["user_data_dir"] = self._warmup_profile_dir
             sb = sb_cdp.Chrome(**kwargs)
@@ -271,29 +281,22 @@ class ChromeDesktop:
             loop.run_until_complete(tab.send(mycdp.network.enable()))
             loop.run_until_complete(tab.send(mycdp.network.set_blocked_urls(urls=BLOCKED_URLS)))
             sb.open("https://www.google.com/search?q=test")
-            time.sleep(5)  # Let JS/CSS bundles fully download and flush to cache
+            time.sleep(5)
             sb.driver.stop()
-            log_fn("✅ Cache pre-warmed — Google JS/CSS now on disk")
+            log_fn(f"{self._log_prefix()} ✅ Cache pre-warmed — Google JS/CSS now on disk")
         except Exception as e:
-            log_fn(f"⚠️  Cache pre-warm failed (non-fatal): {e}")
+            log_fn(f"{self._log_prefix()} ⚠️  Cache pre-warm failed (non-fatal): {e}")
         finally:
             self._remove_warmup_lock_files()
 
     def _start(self, proxy, log_fn):
         import mycdp
 
-        # Always pre-populate the disk cache without proxy before starting the
-        # proxied Chrome. Google's versioned JS URLs rotate frequently so a
-        # stale cache is as expensive as a cold one (~6MB). Running warmup on
-        # every Chrome start ensures the cache has current JS versions, keeping
-        # proxy usage at ~10KB per request (just HTML) instead of ~6MB.
         if proxy:
             self._populate_cache(log_fn)
 
         self._remove_lock_files()
 
-        # Warm up Chrome binary before launching CDP session.
-        # On first deploy this prevents "Failed to connect to the browser".
         if self._is_linux:
             try:
                 subprocess.run(
@@ -314,7 +317,13 @@ class ChromeDesktop:
         self._loop.run_until_complete(
             self._tab.send(mycdp.network.set_blocked_urls(urls=BLOCKED_URLS))
         )
-        log_fn(f"✅ Chrome started, URL blocking enabled ({len(BLOCKED_URLS)} patterns)")
+
+        def _on_loading_finished(event):
+            with self._bytes_lock:
+                self._request_bytes += int(event.encoded_data_length or 0)
+
+        self._tab.add_handler(mycdp.network.LoadingFinished, _on_loading_finished)
+        log_fn(f"{self._log_prefix()} ✅ Chrome started, URL blocking enabled ({len(BLOCKED_URLS)} patterns)")
 
     def _stop(self):
         try:
@@ -356,17 +365,16 @@ class ChromeDesktop:
         elif not self._is_alive():
             reason = "Chrome unresponsive"
         else:
-            log_fn("✅ Reusing existing Chrome instance")
+            log_fn(f"{self._log_prefix()} ✅ Reusing existing Chrome instance")
             return
 
-        log_fn(f"Starting Chrome ({reason})")
+        log_fn(f"{self._log_prefix()} Starting Chrome ({reason})")
         self._stop()
         self._start(proxy, log_fn)
 
     def _handle_cookie_consent(self):
-        reject_selector = '#L2AGLb'  # "Reject all"
-        accept_selector = '#WOwltc'  # "Accept all"
-        # 50/50 random to appear more human
+        reject_selector = '#L2AGLb'
+        accept_selector = '#WOwltc'
         if random.choice([True, False]):
             if self._sb.click_if_visible(reject_selector):
                 self._sb.sleep(1)
@@ -405,7 +413,7 @@ class ChromeDesktop:
 
     def scrape(self, target_url, proxy=None, query_string=None, take_screenshot=True):
         """
-        Scrape target_url using the persistent Chrome instance.
+        Scrape target_url using this Chrome worker.
         Returns a dict with success, url, html, debug_info, and optionally
         screenshot_base64, query, proxy.
         """
@@ -421,35 +429,35 @@ class ChromeDesktop:
                 self._ensure_ready(proxy, log_fn)
                 self._last_request_time = time.time()
 
-                # Clear cookies before navigation — same privacy as incognito,
-                # but disk cache is preserved (that's the whole point).
+                with self._bytes_lock:
+                    self._request_bytes = 0
+
                 self._loop.run_until_complete(
                     self._tab.send(mycdp.network.clear_browser_cookies())
                 )
-                log_fn("✅ Cookies cleared (disk cache preserved)")
+                log_fn(f"{self._log_prefix()} ✅ Cookies cleared (disk cache preserved)")
 
-                log_fn(f"Navigating to: {target_url}")
+                log_fn(f"{self._log_prefix()} Navigating to: {target_url}")
                 self._sb.open(target_url)
                 self._sb.sleep(2)
 
-                # Detect and apply timezone from proxy location
                 if proxy:
                     proxy_data = detect_proxy_timezone(proxy, log_fn, max_retries=3)
                     if proxy_data and proxy_data.get('timezone'):
                         try:
-                            log_fn(f"Applying dynamic timezone: {proxy_data['timezone']}")
+                            log_fn(f"{self._log_prefix()} Applying dynamic timezone: {proxy_data['timezone']}")
                             self._loop.run_until_complete(
                                 self._tab.send(mycdp.emulation.set_timezone_override(
                                     timezone_id=proxy_data['timezone']
                                 ))
                             )
-                            log_fn("✅ Dynamic timezone applied")
+                            log_fn(f"{self._log_prefix()} ✅ Dynamic timezone applied")
                         except Exception as e:
-                            log_fn(f"⚠️  Could not apply timezone: {e}")
+                            log_fn(f"{self._log_prefix()} ⚠️  Could not apply timezone: {e}")
                     else:
-                        log_fn("⚠️  Skipping timezone override (detection failed)")
+                        log_fn(f"{self._log_prefix()} ⚠️  Skipping timezone override (detection failed)")
                 else:
-                    log_fn("No proxy - skipping timezone detection")
+                    log_fn(f"{self._log_prefix()} No proxy - skipping timezone detection")
 
                 self._sb.sleep(1)
 
@@ -462,14 +470,12 @@ class ChromeDesktop:
                 self._sb.sleep(1)
 
                 final_url = self._sb.get_current_url()
-                log_fn(f"Final URL: {final_url}")
+                log_fn(f"{self._log_prefix()} Final URL: {final_url}")
 
                 page_html = self._sb.get_page_source()
                 html_length = len(page_html)
-                log_fn(f"HTML length: {html_length:,} chars")
+                log_fn(f"{self._log_prefix()} HTML length: {html_length:,} chars")
 
-                # CAPTCHA detection — stop Chrome so next request gets a
-                # fresh session instead of continuing with a burnt one.
                 is_captcha = (
                     '/sorry/' in final_url
                     or 'sorry.google.com' in final_url
@@ -477,7 +483,12 @@ class ChromeDesktop:
                     or 'detected unusual traffic' in page_html.lower()
                 )
                 if is_captcha:
-                    log_fn(f"⚠️  CAPTCHA detected (html={html_length:,}, url={final_url}) — stopping Chrome")
+                    with self._bytes_lock:
+                        bytes_used = self._request_bytes
+                    bandwidth_kb = round(bytes_used / 1024, 1)
+                    bandwidth_mb = round(bytes_used / (1024 * 1024), 3)
+                    log_fn(f"{self._log_prefix()} ⚠️  CAPTCHA detected (html={html_length:,}, url={final_url}) — stopping Chrome")
+                    log_fn(f"{self._log_prefix()} Bandwidth this request: {bandwidth_kb} KB ({bandwidth_mb} MB)")
                     self._stop()
                     return {
                         "success": False,
@@ -486,16 +497,19 @@ class ChromeDesktop:
                         "url": final_url,
                         "debug_info": {
                             "mode": "desktop",
-                            "implementation": "Persistent Chrome (ChromeDesktop)",
+                            "worker": self._index,
+                            "implementation": "ChromePool",
                             "logs": debug_log,
                             "html_length": html_length,
+                            "bandwidth_bytes": bytes_used,
+                            "bandwidth_kb": bandwidth_kb,
+                            "bandwidth_mb": bandwidth_mb,
                         },
                     }
 
-                # Screenshot
                 screenshot_base64 = None
                 if take_screenshot:
-                    log_fn("Capturing screenshot...")
+                    log_fn(f"{self._log_prefix()} Capturing screenshot...")
                     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
                         tmp_path = tmp.name
 
@@ -509,13 +523,19 @@ class ChromeDesktop:
                     os.remove(tmp_path)
 
                     screenshot_len = len(screenshot_base64)
-                    log_fn(f"Screenshot size: {screenshot_len:,} chars")
+                    log_fn(f"{self._log_prefix()} Screenshot size: {screenshot_len:,} chars")
                     if screenshot_len < 100000:
-                        log_fn("⚠️  Small screenshot (<100k) - possible CAPTCHA")
+                        log_fn(f"{self._log_prefix()} ⚠️  Small screenshot (<100k) - possible CAPTCHA")
                     elif screenshot_len > 500000:
-                        log_fn("✅ Large screenshot (>500k) - likely real content")
+                        log_fn(f"{self._log_prefix()} ✅ Large screenshot (>500k) - likely real content")
 
                 self._last_request_time = time.time()
+
+                with self._bytes_lock:
+                    bytes_used = self._request_bytes
+                bandwidth_kb = round(bytes_used / 1024, 1)
+                bandwidth_mb = round(bytes_used / (1024 * 1024), 3)
+                log_fn(f"{self._log_prefix()} Bandwidth this request: {bandwidth_kb} KB ({bandwidth_mb} MB)")
 
                 response = {
                     "success": True,
@@ -523,9 +543,13 @@ class ChromeDesktop:
                     "html": page_html,
                     "debug_info": {
                         "mode": "desktop",
-                        "implementation": "Persistent Chrome (ChromeDesktop)",
+                        "worker": self._index,
+                        "implementation": "ChromePool",
                         "logs": debug_log,
                         "html_length": html_length,
+                        "bandwidth_bytes": bytes_used,
+                        "bandwidth_kb": bandwidth_kb,
+                        "bandwidth_mb": bandwidth_mb,
                     },
                 }
 
@@ -539,11 +563,11 @@ class ChromeDesktop:
                 if proxy:
                     response["proxy"] = proxy
 
-                log_fn("✅ Desktop scraping completed")
+                log_fn(f"{self._log_prefix()} ✅ Desktop scraping completed")
                 return response
 
             except Exception as e:
-                log_fn(f"❌ Desktop scrape error: {str(e)}")
+                log_fn(f"{self._log_prefix()} ❌ Desktop scrape error: {str(e)}")
                 self._stop()
                 return {
                     "success": False,
@@ -551,16 +575,82 @@ class ChromeDesktop:
                     "url": target_url,
                     "debug_info": {
                         "mode": "desktop",
-                        "implementation": "Persistent Chrome (ChromeDesktop)",
+                        "worker": self._index,
+                        "implementation": "ChromePool",
                         "logs": debug_log,
                     },
                 }
 
 
-# Module-level singleton — one Chrome process shared across all requests.
-_desktop = ChromeDesktop()
+class ChromePool:
+    """Pool of N persistent Chrome workers. Concurrent requests are dispatched
+    to any available worker; callers block (up to timeout) if all are busy."""
+
+    def __init__(self, size=1):
+        self._size = size
+        is_linux = platform.system() == "Linux"
+        shared_cache = (
+            "/tmp/chrome-cache-desktop"
+            if is_linux
+            else os.path.expanduser("~/.chrome-cache-desktop")
+        )
+        self._workers = [
+            ChromeDesktop(index=i, shared_cache_dir=shared_cache)
+            for i in range(size)
+        ]
+        # Queue holds indices of currently available workers
+        self._available: queue.Queue = queue.Queue()
+        for i in range(size):
+            self._available.put(i)
+
+        print(f"[ChromePool] Initialized with {size} worker(s)", flush=True)
+
+    def scrape(self, target_url, proxy=None, query_string=None, take_screenshot=True):
+        """Acquire a free worker, run the scrape, then release the worker."""
+        try:
+            worker_idx = self._available.get(timeout=120)
+        except queue.Empty:
+            return {
+                "success": False,
+                "error": f"All {self._size} Chrome worker(s) busy — request timed out waiting for a free worker",
+            }
+
+        try:
+            return self._workers[worker_idx].scrape(target_url, proxy, query_string, take_screenshot)
+        finally:
+            self._available.put(worker_idx)
+
+    def status(self):
+        """Return status of all workers (for /chrome-status endpoint)."""
+        import time
+        statuses = []
+        for w in self._workers:
+            running = w._sb is not None
+            proxy = w._current_proxy
+            if proxy and '@' in proxy:
+                proxy = '***@' + proxy.split('@', 1)[1]
+            idle_seconds = round(time.time() - w._last_request_time) if w._last_request_time else None
+            statuses.append({
+                "worker": w._index,
+                "running": running,
+                "current_proxy": proxy,
+                "idle_seconds": idle_seconds,
+            })
+        return statuses
+
+
+# ---------------------------------------------------------------------------
+# Module-level pool — size controlled by CHROME_POOL_SIZE env var (default 1)
+# ---------------------------------------------------------------------------
+_pool_size = int(os.environ.get("CHROME_POOL_SIZE", "1"))
+_pool = ChromePool(size=_pool_size)
 
 
 def scrape_desktop(target_url, proxy=None, query_string=None, take_screenshot=True):
-    """Convenience wrapper around the module-level ChromeDesktop singleton."""
-    return _desktop.scrape(target_url, proxy, query_string, take_screenshot)
+    """Convenience wrapper — dispatches to the module-level ChromePool."""
+    return _pool.scrape(target_url, proxy, query_string, take_screenshot)
+
+
+def get_pool_status():
+    """Return pool status (used by /chrome-status endpoint)."""
+    return _pool.status()
