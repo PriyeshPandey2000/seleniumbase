@@ -587,6 +587,16 @@ try:
     if args.proxy:
         log_debug(f"Proxy: {args.proxy[:50]}...")
 
+    # Remove stale Chrome lock files left by crashed/killed sessions.
+    # Without this, a previous SIGPIPE/crash leaves SingletonLock in the profile
+    # dir and the next Chrome launch fails with "Failed to connect to the browser".
+    for lock_file in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
+        try:
+            os.remove(os.path.join(profile_dir, lock_file))
+            log_debug(f"Removed stale lock: {lock_file}")
+        except OSError:
+            pass  # File doesn't exist — that's fine
+
     # Try to warm up Chrome (non-fatal if it fails)
     chrome_path = "/usr/bin/google-chrome-stable"
     try:
@@ -620,6 +630,8 @@ try:
     log_debug("Setting up URL blocking to save bandwidth...")
     loop.run_until_complete(tab.send(mycdp.network.enable()))
     blocked_urls = [
+        # CSS — pure styling, not needed for data extraction
+        "*.css", "*.css?*",
         # Image extensions (catches most CDN images)
         "*.jpg", "*.jpg?*", "*.jpeg", "*.jpeg?*",
         "*.png", "*.png?*", "*.gif", "*.gif?*",

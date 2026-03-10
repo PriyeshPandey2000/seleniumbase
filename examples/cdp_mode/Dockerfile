@@ -97,6 +97,8 @@ COPY examples/cdp_mode/chrome_desktop.py /app/
 # Display Configuration
 #==================
 ENV DISPLAY=:100
+# Number of concurrent Chrome workers (increase if you have enough RAM; ~400MB per worker)
+ENV CHROME_POOL_SIZE=1
 
 #==================
 # Expose API port
